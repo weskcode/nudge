@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/capability/v2",
+  "identifier": "main-capability",
+  "description": "core permissions for the tray and window IPC",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "core:event:default"
+  ]
+}

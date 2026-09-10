@@ -1,0 +1,69 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+[hidden] { display: none !important; }
+
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; user-select: none; }
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  cursor: pointer;
+}
+
+#overlay-text {
+  font-size: clamp(2rem, 6vw, 4rem);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: center;
+  max-width: 84vw;
+  white-space: pre-wrap;
+}
+
+#overlay-hint { opacity: 0.55; font-size: 1rem; }
+
+#settings {
+  position: fixed;
+  inset: 0;
+  padding: 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  color: #333;
+}
+
+h1 { font-size: 1.3rem; }
+h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin-bottom: 0.5rem; }
+
+section { display: flex; flex-direction: column; gap: 0.4rem; }
+
+label { font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
+
+input[type="text"], input[type="number"] {
+  flex: 0 1 130px;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.presets { display: flex; gap: 0.4rem; }
+
+button {
+  padding: 5px 12px;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+
+footer { margin-top: auto; font-size: 0.75rem; color: #999; }
+footer a { color: #2563eb; }
