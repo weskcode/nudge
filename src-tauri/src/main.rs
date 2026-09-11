@@ -259,21 +259,24 @@ fn show_overlay(app: &AppHandle) {
             builder = builder.fullscreen(true);
         }
 
-        if let Ok(window) = builder.build() {
-            #[cfg(target_os = "macos")]
-            {
-                unsafe {
-                    use objc::{msg_send, sel, sel_impl};
-                    use cocoa::base::id;
-                    let ns_window: id = window.ns_window().unwrap() as id;
-                    const NS_MAIN_MENU_WINDOW_LEVEL: i64 = 24;
-                    let _: () = msg_send![ns_window, setLevel: NS_MAIN_MENU_WINDOW_LEVEL];
-                    let behavior: u64 = msg_send![ns_window, collectionBehavior];
-                    let combined = behavior | 1 << 0 | 1 << 8;
-                    let _: () = msg_send![ns_window, setCollectionBehavior: combined];
+        match builder.build() {
+            Ok(window) => {
+                #[cfg(target_os = "macos")]
+                {
+                    unsafe {
+                        use objc::{msg_send, sel, sel_impl};
+                        use cocoa::base::id;
+                        let ns_window: id = window.ns_window().unwrap() as id;
+                        const NS_MAIN_MENU_WINDOW_LEVEL: i64 = 24;
+                        let _: () = msg_send![ns_window, setLevel: NS_MAIN_MENU_WINDOW_LEVEL];
+                        let behavior: u64 = msg_send![ns_window, collectionBehavior];
+                        let combined = behavior | 1 << 0 | 1 << 8;
+                        let _: () = msg_send![ns_window, setCollectionBehavior: combined];
+                    }
                 }
+                opened.push(label);
             }
-            opened.push(label);
+            Err(error) => println!("overlay {label} failed to create: {error:?}"),
         }
     }
 
@@ -554,13 +557,21 @@ fn main() {
             // keep the first overlay window key-focused while a reminder is showing, so
             // that "any key to dismiss" keeps working without fighting the other overlays
             if matches!(event, tauri::WindowEvent::Focused(false))
-                && window.label() == "overlay-0"
+                && window.label().starts_with("overlay-")
                 && *window.app_handle().state::<App>().showing.lock().unwrap()
             {
                 let handle = window.app_handle().clone();
                 let focus_handle = handle.clone();
                 let _ = handle.run_on_main_thread(move || {
-                    if let Some(w) = focus_handle.get_webview_window("overlay-0") {
+                    let primary = focus_handle
+                        .state::<App>()
+                        .overlay_windows
+                        .lock()
+                        .unwrap()
+                        .first()
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some(w) = focus_handle.get_webview_window(&primary) {
                         let _ = w.set_focus();
                     }
                 });
