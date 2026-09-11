@@ -38,8 +38,9 @@ Requires Node, npm and the Rust toolchain.
 
 ```
 npm install
-npm run tauri dev    # run in development
-npm run build        # produce an installer/binary in src-tauri/target
+npm run tauri dev     # run in development
+npm run build         # produce an installer/binary in src-tauri/target
+npm run install:app   # build a release bundle and install/relaunch /Applications/Nudge.app (macOS)
 ```
 
 ## Platform notes

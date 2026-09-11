@@ -16,6 +16,8 @@ struct Config {
     message: String,
     enabled_on_wake: bool,
     reset_on_wake: bool,
+    play_sound: bool,
+    launch_at_login: bool,
     count_total: u32,
 }
 
@@ -26,6 +28,8 @@ impl Default for Config {
             message: "time to step away".into(),
             enabled_on_wake: true,
             reset_on_wake: true,
+            play_sound: true,
+            launch_at_login: false,
             count_total: 0,
         }
     }
@@ -37,6 +41,8 @@ struct PublicState {
     message: String,
     enabled_on_wake: bool,
     reset_on_wake: bool,
+    play_sound: bool,
+    launch_at_login: bool,
     count_total: u32,
     count_session: u32,
     enabled: bool,
@@ -65,7 +71,7 @@ fn config_path() -> PathBuf {
     dir.join("config.json")
 }
 
-fn load_config(_app: &AppHandle) -> Config {
+fn load_config() -> Config {
     fs::read_to_string(config_path())
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
@@ -100,6 +106,8 @@ fn snapshot(app: &AppHandle) -> PublicState {
         message: config.message.clone(),
         enabled_on_wake: config.enabled_on_wake,
         reset_on_wake: config.reset_on_wake,
+        play_sound: config.play_sound,
+        launch_at_login: config.launch_at_login,
         count_total: config.count_total,
         count_session: session,
         enabled: next.is_some() || showing,
@@ -130,7 +138,6 @@ fn disable_reminders(app: &AppHandle) {
     *state.next_fire.lock().unwrap() = None;
     if *state.showing.lock().unwrap() {
         hide_overlay(app);
-        return;
     }
     refresh_tray(app);
     broadcast(app);
@@ -204,7 +211,7 @@ fn refresh_tray(app: &AppHandle) {
 }
 
 fn show_overlay(app: &AppHandle) {
-    if is_reminders_enabled(app) && *app.state::<App>().showing.lock().unwrap() {
+    if *app.state::<App>().showing.lock().unwrap() {
         return;
     }
     let state = app.state::<App>();
@@ -218,7 +225,6 @@ fn show_overlay(app: &AppHandle) {
     let mut seq = state.overlay_seq.lock().unwrap();
     *seq += 1;
     let seq = *seq;
-    drop(seq);
 
     let monitors = match app.available_monitors() {
         Ok(monitors) if !monitors.is_empty() => monitors,
@@ -277,6 +283,9 @@ fn show_overlay(app: &AppHandle) {
     if cfg!(target_os = "macos") {
         let _ = app.show();
     }
+    if state.config.lock().unwrap().play_sound {
+        play_sound();
+    }
     refresh_tray(app);
     broadcast(app);
 }
@@ -294,7 +303,15 @@ fn hide_overlay(app: &AppHandle) {
             let _ = app.hide();
         }
     }
-    enable_reminders(app);
+}
+
+#[tauri::command]
+fn close_overlay(app: AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        hide_overlay(&handle);
+        enable_reminders(&handle);
+    });
 }
 
 fn on_wake(app: &AppHandle) {
@@ -311,6 +328,7 @@ fn on_wake_main(app: &AppHandle) {
 
     if was_showing {
         hide_overlay(app);
+        enable_reminders(app);
     }
     if config.enabled_on_wake && state.next_fire.lock().unwrap().is_none() {
         enable_reminders(app);
@@ -319,6 +337,28 @@ fn on_wake_main(app: &AppHandle) {
     }
     refresh_tray(app);
     broadcast(app);
+}
+
+// global key listener: dismiss the reminder on any key press, even when some
+// other app is frontmost (the overlay webview never gets those key events).
+// needs Accessibility/Input Monitoring permission; see listen result comment
+fn global_key_listener(app: AppHandle) {
+    let result = rdev::listen(move |event| {
+        if matches!(event.event_type, rdev::EventType::KeyPress(_)) {
+            let handle = app.clone();
+            let main_handle = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                let state = main_handle.state::<App>();
+                if *state.showing.lock().unwrap() {
+                    hide_overlay(&main_handle);
+                    enable_reminders(&main_handle);
+                }
+            });
+        }
+    });
+    if let Err(error) = result {
+        println!("global key listener unavailable: {error:?}");
+    }
 }
 
 fn tick_loop(app: AppHandle) {
@@ -341,12 +381,56 @@ fn tick_loop(app: AppHandle) {
         let state = app.state::<App>();
         let next = *state.next_fire.lock().unwrap();
         if next.is_some() && next.unwrap() <= Instant::now() {
+            *state.next_fire.lock().unwrap() = None;
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || show_overlay(&handle));
             continue;
         }
         refresh_tray(&app);
     }
+}
+
+const CHIME: &[u8] = include_bytes!("assets/chime.wav");
+
+fn play_sound() {
+    let path = std::env::temp_dir().join("nudge-chime.wav");
+    if let Ok(mut file) = std::fs::File::create(&path) {
+        use std::io::Write;
+        let _ = file.write_all(CHIME);
+        let path_string = path.display().to_string();
+        let result = if cfg!(target_os = "macos") {
+            ProcCommand::new("afplay").arg(&path_string).spawn()
+        } else if cfg!(target_os = "windows") {
+            ProcCommand::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    &format!(
+                        "(New-Object Media.SoundPlayer '{}').PlaySync()",
+                        path_string.replace('\'', "''")
+                    ),
+                ])
+                .spawn()
+        } else {
+            ProcCommand::new("paplay").arg(&path_string).spawn().or_else(|_| {
+                ProcCommand::new("aplay").arg(&path_string).spawn()
+            })
+        };
+        let _ = result;
+    }
+}
+
+#[tauri::command]
+fn snooze(app: AppHandle, minutes: u32) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let mins = minutes.max(1).min(120);
+        hide_overlay(&handle);
+        let state = handle.state::<App>();
+        *state.next_fire.lock().unwrap() = Some(Instant::now() + Duration::from_secs(mins as u64 * 60));
+        refresh_tray(&handle);
+        broadcast(&handle);
+    });
 }
 
 fn open_url(url: &str) {
@@ -372,6 +456,8 @@ fn set_config(
     message: Option<String>,
     enabled_on_wake: Option<bool>,
     reset_on_wake: Option<bool>,
+    play_sound: Option<bool>,
+    launch_at_login: Option<bool>,
 ) {
     let state = app.state::<App>();
     if interval_secs.unwrap_or(0) > 0 {
@@ -392,15 +478,22 @@ fn set_config(
     if let Some(value) = reset_on_wake {
         state.config.lock().unwrap().reset_on_wake = value;
     }
+    if let Some(value) = play_sound {
+        state.config.lock().unwrap().play_sound = value;
+    }
+    if let Some(enable) = launch_at_login {
+        state.config.lock().unwrap().launch_at_login = enable;
+        use tauri_plugin_autostart::ManagerExt;
+        let autostart = app.autolaunch();
+        let _ = if enable {
+            autostart.enable()
+        } else {
+            autostart.disable()
+        };
+    }
     save_config(&app);
     refresh_tray(&app);
     broadcast(&app);
-}
-
-#[tauri::command]
-fn close_overlay(app: AppHandle) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || hide_overlay(&handle));
 }
 
 #[tauri::command]
@@ -433,6 +526,10 @@ fn open_settings(app: AppHandle) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(App {
             config: Mutex::new(Config::default()),
             next_fire: Mutex::new(None),
@@ -449,14 +546,31 @@ fn main() {
             get_state,
             set_config,
             close_overlay,
+            snooze,
             reset_counters,
             open_settings
         ])
+        .on_window_event(|window, event| {
+            // keep the first overlay window key-focused while a reminder is showing, so
+            // that "any key to dismiss" keeps working without fighting the other overlays
+            if matches!(event, tauri::WindowEvent::Focused(false))
+                && window.label() == "overlay-0"
+                && *window.app_handle().state::<App>().showing.lock().unwrap()
+            {
+                let handle = window.app_handle().clone();
+                let focus_handle = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    if let Some(w) = focus_handle.get_webview_window("overlay-0") {
+                        let _ = w.set_focus();
+                    }
+                });
+            }
+        })
         .setup(|app| {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let handle = app.handle().clone();
-            let config = load_config(&handle);
+            let config = load_config();
             *app.state::<App>().config.lock().unwrap() = config;
 
             let countdown = MenuItem::with_id(
@@ -530,6 +644,12 @@ fn main() {
             {
                 let handle = handle.clone();
                 std::thread::spawn(move || tick_loop(handle));
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                let key_handle = handle.clone();
+                std::thread::spawn(move || global_key_listener(key_handle));
             }
 
             Ok(())

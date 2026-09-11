@@ -18,6 +18,8 @@ function render(s) {
   $("message").value = s.message;
   $("enabled-on-wake").checked = s.enabled_on_wake;
   $("reset-on-wake").checked = s.reset_on_wake;
+  $("play-sound").checked = s.play_sound;
+  $("launch-at-login").checked = s.launch_at_login;
   $("counter-line").textContent =
     `${s.count_session} reminders since last wake, ${s.count_total} reminders total`;
   applyPresetHighlight();
@@ -50,9 +52,17 @@ $("enabled-on-wake").addEventListener("change", () => {
   invoke("set_config", { enabledOnWake: $("enabled-on-wake").checked }).then(render);
 });
 
-$("reset-on-wake").addEventListener("change", () => {
-  invoke("set_config", { resetOnWake: $("reset-on-wake").checked }).then(render);
-});
+  $("reset-on-wake").addEventListener("change", () => {
+    invoke("set_config", { resetOnWake: $("reset-on-wake").checked }).then(render);
+  });
+
+  $("play-sound").addEventListener("change", () => {
+    invoke("set_config", { playSound: $("play-sound").checked }).then(render);
+  });
+
+  $("launch-at-login").addEventListener("change", () => {
+    invoke("set_config", { launchAtLogin: $("launch-at-login").checked }).then(render);
+  });
 
 $("reset-counters").addEventListener("click", () => {
   invoke("reset_counters").then(render);

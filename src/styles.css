@@ -11,21 +11,64 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; u
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1.5rem;
+  gap: clamp(1rem, 3.5vmin, 2.5rem);
+  padding: clamp(1.5rem, 6vmin, 4rem);
   background: rgba(0, 0, 0, 0.85);
   color: #fff;
   cursor: pointer;
+  animation: overlay-fade 0.35s ease-out;
+}
+
+@keyframes overlay-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 #overlay-text {
-  font-size: clamp(2rem, 6vw, 4rem);
+  font-size: clamp(1.75rem, 9vmin, 4.5rem);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   text-align: center;
-  max-width: 84vw;
-  white-space: pre-wrap;
+  max-width: min(90vw, 120vmin);
+  overflow-wrap: break-word;
 }
 
-#overlay-hint { opacity: 0.55; font-size: 1rem; }
+#overlay-stats {
+  font-size: clamp(0.8rem, 2vmin, 1.1rem);
+  opacity: 0.55;
+  text-align: center;
+  order: 3;
+}
+
+.overlay-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.6rem, 1.8vmin, 1.1rem);
+}
+
+#snooze {
+  padding: 0.55em 1.75em;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 999px;
+  font-size: clamp(0.9rem, 2.4vmin, 1.15rem);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+#snooze:hover { background: rgba(255, 255, 255, 0.2); }
+#snooze:focus-visible { outline: 3px solid rgba(255, 255, 255, 0.75); outline-offset: 2px; }
+
+#overlay-hint {
+  opacity: 0.55;
+  font-size: clamp(0.75rem, 1.9vmin, 1rem);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #overlay { animation: none; }
+}
 
 #settings {
   position: fixed;
@@ -34,6 +77,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; u
   display: flex;
   flex-direction: column;
   gap: 1.1rem;
+  max-width: 640px;
+  margin: 0 auto;
   color: #333;
 }
 
@@ -41,18 +86,20 @@ h1 { font-size: 1.3rem; }
 h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin-bottom: 0.5rem; }
 
 section { display: flex; flex-direction: column; gap: 0.4rem; }
+section p { font-size: 0.9rem; }
 
 label { font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
 
+input[type="text"] { flex: 1; }
+
 input[type="text"], input[type="number"] {
-  flex: 0 1 130px;
   padding: 4px 8px;
   border: 1px solid #ccc;
   border-radius: 6px;
   font-size: 0.9rem;
 }
 
-.presets { display: flex; gap: 0.4rem; }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 
 button {
   padding: 5px 12px;

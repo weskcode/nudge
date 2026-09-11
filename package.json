@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "install:app": "sh scripts/install-release.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
