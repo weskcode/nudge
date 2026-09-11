@@ -19,6 +19,8 @@ struct Config {
     play_sound: bool,
     launch_at_login: bool,
     count_total: u32,
+    #[serde(default)]
+    auto_dismiss_secs: u32,
 }
 
 impl Default for Config {
@@ -31,6 +33,7 @@ impl Default for Config {
             play_sound: true,
             launch_at_login: false,
             count_total: 0,
+            auto_dismiss_secs: 0,
         }
     }
 }
@@ -44,6 +47,7 @@ struct PublicState {
     play_sound: bool,
     launch_at_login: bool,
     count_total: u32,
+    auto_dismiss_secs: u32,
     count_session: u32,
     enabled: bool,
     showing: bool,
@@ -109,6 +113,7 @@ fn snapshot(app: &AppHandle) -> PublicState {
         play_sound: config.play_sound,
         launch_at_login: config.launch_at_login,
         count_total: config.count_total,
+        auto_dismiss_secs: config.auto_dismiss_secs,
         count_session: session,
         enabled: next.is_some() || showing,
         showing,
@@ -289,6 +294,27 @@ fn show_overlay(app: &AppHandle) {
     if state.config.lock().unwrap().play_sound {
         play_sound();
     }
+
+    // auto-dismiss after a configured delay so the reminder can never be missed
+    // forever, e.g. when the global key listener lacks permission
+    if let Some(wait) = {
+        let secs = state.config.lock().unwrap().auto_dismiss_secs;
+        (secs > 0).then(|| Duration::from_secs(secs as u64))
+    } {
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
+            let dismiss_handle = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                let reminder_state = dismiss_handle.state::<App>();
+                if *reminder_state.showing.lock().unwrap() {
+                    hide_overlay(&dismiss_handle);
+                    enable_reminders(&dismiss_handle);
+                }
+            });
+        });
+    }
+
     refresh_tray(app);
     broadcast(app);
 }
@@ -302,7 +328,9 @@ fn hide_overlay(app: &AppHandle) {
             }
         }
         *state.showing.lock().unwrap() = false;
-        if cfg!(target_os = "macos") {
+        // only hide the whole app when no settings window is open that the user
+        // may still be interacting with
+        if cfg!(target_os = "macos") && app.get_webview_window("settings").is_none() {
             let _ = app.hide();
         }
     }
@@ -461,10 +489,11 @@ fn set_config(
     reset_on_wake: Option<bool>,
     play_sound: Option<bool>,
     launch_at_login: Option<bool>,
+    auto_dismiss_secs: Option<u32>,
 ) {
     let state = app.state::<App>();
     if interval_secs.unwrap_or(0) > 0 {
-        let interval = interval_secs.unwrap();
+        let interval = interval_secs.unwrap().max(5 * 60);
         let mut config = state.config.lock().unwrap();
         config.interval_secs = interval;
         if is_reminders_enabled(&app) {
@@ -483,6 +512,9 @@ fn set_config(
     }
     if let Some(value) = play_sound {
         state.config.lock().unwrap().play_sound = value;
+    }
+    if let Some(value) = auto_dismiss_secs {
+        state.config.lock().unwrap().auto_dismiss_secs = value;
     }
     if let Some(enable) = launch_at_login {
         state.config.lock().unwrap().launch_at_login = enable;

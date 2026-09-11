@@ -20,6 +20,7 @@ function render(s) {
   $("reset-on-wake").checked = s.reset_on_wake;
   $("play-sound").checked = s.play_sound;
   $("launch-at-login").checked = s.launch_at_login;
+  $("auto-dismiss").value = s.auto_dismiss_secs;
   $("counter-line").textContent =
     `${s.count_session} reminders since last wake, ${s.count_total} reminders total`;
   applyPresetHighlight();
@@ -58,6 +59,11 @@ $("enabled-on-wake").addEventListener("change", () => {
 
   $("play-sound").addEventListener("change", () => {
     invoke("set_config", { playSound: $("play-sound").checked }).then(render);
+  });
+
+  $("auto-dismiss").addEventListener("change", () => {
+    const secs = Math.max(0, Math.min(600, Number($("auto-dismiss").value) || 0));
+    invoke("set_config", { autoDismissSecs: secs }).then(render);
   });
 
   $("launch-at-login").addEventListener("change", () => {
