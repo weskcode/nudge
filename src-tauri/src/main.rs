@@ -551,7 +551,7 @@ fn open_settings(app: AppHandle) {
             WebviewUrl::App("index.html".into()),
         )
         .title("Nudge Settings")
-        .inner_size(440.0, 500.0)
+        .inner_size(440.0, 640.0)
         .center()
         .resizable(false)
         .build();

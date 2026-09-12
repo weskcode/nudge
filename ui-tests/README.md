@@ -7,10 +7,10 @@ UI intentionally changes, named `<surface>-<YYYY-MM-DD>.png`.
 
 - `overlay-current.png` — the fullscreen reminder over a real desktop
   (Retina capture, 2x), message + snooze pill + dismiss hint + counters.
-- `settings-current.png` — pixel replica of the Settings webview at the
-  live window's layout (real window is 440x500 logical; captured from the
-  exact same HTML/CSS at its content width, webview-only differences:
-  no native window chrome / traffic lights).
+- `settings-current.png` — replica of the Settings window at its true
+  440x500 logical content size (same HTML/CSS/JS as `index.html`; the
+  real window differs only by native window chrome (title bar), which
+  adds ~28px above this region).
 
 How the settings replica was produced: NSStatusItem menus are not
 exposed to the accessibility bridge on modern macOS, so the tray menu
