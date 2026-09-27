@@ -71,7 +71,16 @@ function renderStatus() {
   $("countdown-label").textContent = label;
   $("countdown-time").textContent = time;
   $("countdown-detail").textContent = info;
-  $("dial-fill").style.strokeDashoffset = String(DIAL * (1 - fraction));
+  // jump, don't sweep, on the first render or when a new cycle starts
+  const dial = $("dial-fill");
+  const offset = DIAL * (1 - fraction);
+  const jump = !(Math.abs(offset - parseFloat(dial.style.strokeDashoffset)) <= DIAL * 0.02);
+  dial.classList.toggle("no-anim", jump);
+  dial.style.strokeDashoffset = String(offset);
+  if (jump) {
+    void dial.getBoundingClientRect();
+    dial.classList.remove("no-anim");
+  }
 
   // the menu bar miniature mirrors what the status item shows
   const mode = state.menu_bar_timer;
@@ -107,7 +116,7 @@ function replayPreview() {
 function renderPreview(s, message = s.message) {
   const preview = $("live-preview");
   const before = preview.className;
-  preview.className = `preview style-${s.style} size-${s.text_size}${s.auto_dismiss_secs > 0 ? " has-ring" : ""}`;
+  preview.className = `preview style-${s.style} size-${s.text_size} layout-${s.layout}${s.auto_dismiss_secs > 0 ? " has-ring" : ""}`;
   $("pv-message").textContent = message || "Time to step away";
   $("pv-idea").hidden = !s.break_ideas;
   $("pv-idea").textContent = BREAK_IDEAS[ideaIndex];
@@ -136,6 +145,7 @@ function render(s) {
   $("break-ideas").checked = s.break_ideas;
   setRadio("style", s.style);
   setRadio("text-size", s.text_size);
+  setRadio("layout", s.layout);
   $("show-counts").checked = s.show_counts;
 
   setSelect($("auto-dismiss"), s.auto_dismiss_secs, (v) => `${v} seconds`);
@@ -195,6 +205,7 @@ document.querySelector(".nav").addEventListener("keydown", (e) => {
 // a background window greys its sidebar selection, as AppKit does
 window.addEventListener("blur", () => document.body.classList.add("inactive"));
 window.addEventListener("focus", () => document.body.classList.remove("inactive"));
+document.body.classList.toggle("inactive", !document.hasFocus());
 
 // ----- platform-specific options -----
 
@@ -276,6 +287,9 @@ document.querySelectorAll('input[name="style"]').forEach((input) =>
 );
 document.querySelectorAll('input[name="text-size"]').forEach((input) =>
   input.addEventListener("change", () => save({ textSize: input.value })),
+);
+document.querySelectorAll('input[name="layout"]').forEach((input) =>
+  input.addEventListener("change", () => save({ layout: input.value })),
 );
 $("show-counts").addEventListener("change", (e) => save({ showCounts: e.target.checked }));
 $("preview").addEventListener("click", () => invoke("preview_reminder"));

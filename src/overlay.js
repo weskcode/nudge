@@ -25,6 +25,7 @@ let snoozeMins = 5;
 // keys and clicks already in flight when the reminder opened were meant for
 // another app; ignore them so the reminder can't vanish unseen
 const openedAt = performance.now();
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const settling = () => performance.now() - openedAt < 1500;
 
 function plural(n, word) {
@@ -36,7 +37,7 @@ function breakLabel(secs) {
 }
 
 invoke("get_state").then((s) => {
-  document.body.classList.add(`style-${s.style}`, `size-${s.text_size}`);
+  document.body.classList.add(`style-${s.style}`, `size-${s.text_size}`, `layout-${s.layout}`);
   if (!isMac) document.body.classList.add("no-blur");
 
   $("overlay-text").textContent = s.message;
@@ -56,9 +57,11 @@ invoke("get_state").then((s) => {
   if (s.auto_dismiss_secs > 0) {
     document.body.classList.add("has-ring");
     document.body.style.setProperty("--break", `${s.auto_dismiss_secs}s`);
-    document.querySelector(".ring").removeAttribute("hidden"); // SVG elements have no .hidden property
     $("overlay-hint").textContent = `Ends on its own in ${breakLabel(s.auto_dismiss_secs)}, or press any key`;
   }
+
+  // SVG elements have no .hidden property; the ring layout always shows the ring
+  if (s.auto_dismiss_secs > 0 || s.layout === "ring") document.querySelector(".ring").removeAttribute("hidden");
 
   if (s.show_counts) {
     $("overlay-stats").textContent =
@@ -71,8 +74,18 @@ invoke("get_state").then((s) => {
   $("done").focus({ focusVisible: false });
 });
 
+// fade out before the window closes; the first request wins
+function leave(command, args) {
+  if (document.body.classList.contains("leaving")) return;
+  // on failure bring the reminder back so it can be dismissed again
+  const send = () => invoke(command, args).catch(() => document.body.classList.remove("leaving"));
+  if (reduceMotion.matches) return send();
+  document.body.classList.add("leaving");
+  setTimeout(send, 160);
+}
+
 function dismiss() {
-  invoke("close_overlay").catch(() => {});
+  leave("close_overlay");
 }
 
 $("overlay").addEventListener("click", (event) => {
@@ -86,7 +99,7 @@ $("overlay").addEventListener("click", (event) => {
 $("snooze").addEventListener("click", (event) => {
   event.stopPropagation();
   if (settling() && event.detail === 0) return;
-  invoke("snooze", { minutes: snoozeMins }).catch(() => {});
+  leave("snooze", { minutes: snoozeMins });
 });
 
 // keys that move focus or start a shortcut never dismiss, so the buttons stay reachable

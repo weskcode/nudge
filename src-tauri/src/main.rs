@@ -39,12 +39,15 @@ struct Config {
     snooze_mins: u32,
     #[serde(default = "default_menu_bar_timer")]
     menu_bar_timer: String,
+    #[serde(default = "default_layout")]
+    layout: String,
 }
 
 const STYLES: &[&str] = &["frosted", "dusk", "ocean", "forest", "midnight"];
 const TEXT_SIZES: &[&str] = &["standard", "large", "xlarge"];
 const SOUNDS: &[&str] = &["chime", "glass", "hero", "ping", "purr", "submarine"];
 const MENU_BAR_TIMERS: &[&str] = &["never", "last5", "always"];
+const LAYOUTS: &[&str] = &["classic", "card", "ring"];
 
 fn default_true() -> bool {
     true
@@ -63,6 +66,9 @@ fn default_snooze() -> u32 {
 }
 fn default_menu_bar_timer() -> String {
     "never".into()
+}
+fn default_layout() -> String {
+    "classic".into()
 }
 
 impl Default for Config {
@@ -83,6 +89,7 @@ impl Default for Config {
             sound: default_sound(),
             snooze_mins: default_snooze(),
             menu_bar_timer: default_menu_bar_timer(),
+            layout: default_layout(),
         }
     }
 }
@@ -742,6 +749,7 @@ fn set_config(
     sound: Option<String>,
     snooze_mins: Option<u32>,
     menu_bar_timer: Option<String>,
+    layout: Option<String>,
 ) {
     let state = app.state::<App>();
     if interval_secs.unwrap_or(0) > 0 {
@@ -795,6 +803,9 @@ fn set_config(
         }
         if let Some(value) = menu_bar_timer.filter(|v| MENU_BAR_TIMERS.contains(&v.as_str())) {
             config.menu_bar_timer = value;
+        }
+        if let Some(value) = layout.filter(|v| LAYOUTS.contains(&v.as_str())) {
+            config.layout = value;
         }
     }
     if let Some(enable) = launch_at_login {
@@ -1140,6 +1151,7 @@ mod tests {
         assert_eq!(config.sound, "chime");
         assert_eq!(config.snooze_mins, 5);
         assert_eq!(config.menu_bar_timer, "never");
+        assert_eq!(config.layout, "classic");
     }
 
     #[test]
@@ -1154,7 +1166,7 @@ mod tests {
         let json = serde_json::to_value(state).unwrap();
         for key in [
             "interval_secs", "message", "play_sound", "auto_dismiss_secs", "style",
-            "snooze_mins", "menu_bar_timer", "count_session", "enabled", "remaining_secs",
+            "snooze_mins", "menu_bar_timer", "layout", "count_session", "enabled", "remaining_secs",
         ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }
