@@ -39,6 +39,9 @@ matters most if you have ADHD or tend to hyperfocus:
   not fade into the background
 - Five reminder styles (Frosted, Dusk, Ocean, Forest, Midnight) and three text
   sizes, with a Preview button
+- Three reminder layouts: Classic (text on the backdrop), Card (a glass panel)
+  and Ring (a large ring around the icon that counts down the break when a
+  break length is set)
 - Break length: the reminder can close by itself after 20 seconds to 10
   minutes, with a ring that shows the time left
 - Snooze length (or no snooze button at all)

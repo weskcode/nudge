@@ -2,13 +2,16 @@
 
 ## 2026-09-27
 
-Captured from the signed release build (working tree after `59099a6`) on
-macOS 27, dark appearance, Retina (2x), with `screencapture -l <window id>`.
+Captured from the signed release build on macOS 27, Retina (2x), with
+`screencapture -l <window id>`.
 
 - `settings-2026-09-27.png`: the redesigned Settings window (780x580
   logical), a System Settings–style sidebar over the native window material,
-  showing the Reminder page with its live preview and style picker.
-- `about-2026-09-27.png`: the About panel opened from the menu bar menu.
+  showing the Reminder page with its live preview, style swatches and the
+  Classic / Card / Ring layout picker (0.2.0, `b9117d1`, light appearance,
+  Card selected).
+- `about-2026-09-27.png`: the About panel opened from the menu bar menu
+  (working tree after `59099a6`, dark appearance).
 
 The overlay was not recaptured: showing it takes over every screen, and the
 button styling change is small. `overlay-current.png` still shows the layout.
