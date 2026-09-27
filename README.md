@@ -20,17 +20,34 @@ reminder pattern all come from `remindful`.
 
 ## Features
 
-- System tray icon: left click toggles reminders on and off, right click opens
-  the menu with a live countdown, settings, and quit
-- Full screen translucent reminder over every connected display that stays
-  visible over fullscreen apps and workspaces
-- Click anywhere or press any key to dismiss
+- Menu bar / system tray icon: click it for the menu with a live countdown,
+  Take a Break Now, Pause Reminders (30 minutes, 1 hour, 2 hours), on/off,
+  Settings and About
+- Full screen reminder over every connected display that stays visible over
+  fullscreen apps and workspaces; on macOS it blurs what is behind it
+- Click, press Done, or press any key to dismiss; optional Snooze button
 - Interval presets of 15/30/45/60/90 minutes plus a custom value, applied live
-- Custom reminder message
-- Optional behaviors after your computer wakes from sleep: re-enable reminders,
-  reset the timer
-- Reminder counters (since last wake, lifetime) with a reset button
-- Settings persist between runs
+- Settings persist between runs and follow light and dark mode
+
+### Make it yours
+
+Options chosen to keep reminders noticeable, kind and low friction, which
+matters most if you have ADHD or tend to hyperfocus:
+
+- Your own message, plus an optional break idea that changes every time
+  ("Refill your water", "Jot down where you left off") so the reminder does
+  not fade into the background
+- Five reminder styles (Frosted, Dusk, Ocean, Forest, Midnight) and three text
+  sizes, with a Preview button
+- Break length: the reminder can close by itself after 20 seconds to 10
+  minutes, with a ring that shows the time left
+- Snooze length (or no snooze button at all)
+- Sound: Chime, macOS system sounds, or none
+- Time left in the menu bar: never, only in the last 5 minutes as a heads-up,
+  or always (macOS and Linux)
+- Show or hide the reminder counter
+- After waking from sleep: re-enable reminders, restart the timer
+- Open at login
 
 ## Building from source
 
@@ -42,6 +59,11 @@ npm run tauri dev     # run in development
 npm run build         # produce an installer/binary in src-tauri/target
 npm run install:app   # build a release bundle and install/relaunch /Applications/Nudge.app (macOS)
 ```
+
+`install:app` signs the app with the first "Developer ID Application"
+certificate in your keychain (override with `APPLE_SIGNING_IDENTITY`). A
+stable signature lets macOS remember the Input Monitoring permission across
+updates. Without a certificate the app is ad-hoc signed.
 
 ## Platform notes
 

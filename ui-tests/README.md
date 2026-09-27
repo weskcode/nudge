@@ -1,5 +1,20 @@
 # UI snapshots (point-in-time reference)
 
+## 2026-09-27
+
+Captured from the signed release build (working tree after `59099a6`) on
+macOS 27, dark appearance, Retina (2x), with `screencapture -l <window id>`.
+
+- `settings-2026-09-27.png`: the redesigned Settings window (780x580
+  logical), a System Settings–style sidebar over the native window material,
+  showing the Reminder page with its live preview and style picker.
+- `about-2026-09-27.png`: the About panel opened from the menu bar menu.
+
+The overlay was not recaptured: showing it takes over every screen, and the
+button styling change is small. `overlay-current.png` still shows the layout.
+
+## 2026-09-12
+
 Date captured: 2026-09-12, bundled release build from commit working-tree
 at that time (auto-dismiss + interval floor + settings-persistence batch,
 `bdd12dd` and later). Commit new screenshots next to these whenever the

@@ -1,18 +1,26 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <link rel="stylesheet" href="styles.css" />
-  <title>nudge</title>
+  <title>Nudge</title>
 </head>
 <body id="overlay-body">
-  <div id="overlay">
-    <div id="overlay-text"></div>
-    <div class="overlay-actions">
-      <button id="snooze">snooze 5m</button>
-      <span id="overlay-hint">click or press any key to dismiss</span>
+  <div id="overlay" role="alertdialog" aria-labelledby="overlay-text">
+    <div class="reminder">
+      <div class="glyph" aria-hidden="true">
+        <svg class="figure" viewBox="0 0 24 24"><circle cx="13" cy="4" r="1.8"/><path d="M9 21l2.5-6 2.5 2v4M7.5 11.5l2-3.5 4 1 2.5 3 2.5.5M11.5 15l1-6"/></svg>
+        <svg class="ring" viewBox="0 0 90 90" hidden><circle class="track" cx="45" cy="45" r="44"/><circle class="progress" cx="45" cy="45" r="44"/></svg>
+      </div>
+      <h1 id="overlay-text"></h1>
+      <p id="overlay-idea" hidden></p>
+      <div class="overlay-actions">
+        <button id="snooze" class="pill glass" type="button" hidden></button>
+        <button id="done" class="pill primary" type="button">Done</button>
+      </div>
+      <p id="overlay-hint">or press any key</p>
     </div>
-    <div id="overlay-stats"></div>
+    <p id="overlay-stats" hidden></p>
   </div>
   <script src="overlay.js"></script>
 </body>
