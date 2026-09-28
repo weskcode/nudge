@@ -221,10 +221,21 @@ fn load_config() -> Config {
 fn save_config(app: &AppHandle) {
     let json = config_json(&app.state::<App>().config.lock().unwrap());
     if let Ok(text) = serde_json::to_string_pretty(&json) {
-        if let Err(error) = fs::write(config_path(), text) {
+        if let Err(error) = replace_file(&config_path(), &text) {
             println!("saving settings failed: {error:?}");
         }
     }
+}
+
+// write beside the file, then rename over it, so a write that fails part way
+// (a full disk, say) leaves the old settings whole rather than a cut-off file
+fn replace_file(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let temp = path.with_extension("json.tmp");
+    let result = fs::write(&temp, text).and_then(|_| fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 fn nudges(app: &AppHandle) -> Vec<Nudge> {
@@ -1379,8 +1390,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        config_json, hms, parse_config, AlsoNow, Config, Nudge, NudgeState, OverlayState,
-        PublicState,
+        config_json, hms, parse_config, replace_file, AlsoNow, Config, Nudge, NudgeState,
+        OverlayState, PublicState,
     };
     use serde::Deserialize;
 
@@ -1469,6 +1480,26 @@ mod tests {
         let loaded: Vec<(u32, &str)> =
             config.nudges.iter().map(|n| (n.id, n.message.as_str())).collect();
         assert_eq!(loaded, vec![(2, "a"), (3, "b"), (1, "c"), (4, "d")]);
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_old_settings() {
+        let dir = std::env::temp_dir().join(format!("nudge-save-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+
+        replace_file(&path, "old").unwrap();
+        replace_file(&path, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert!(!dir.join("config.json.tmp").exists());
+
+        // a directory where the temp file goes makes the write fail
+        std::fs::create_dir(dir.join("config.json.tmp")).unwrap();
+        assert!(replace_file(&path, "lost").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     // the Config struct as 0.2.0 declared it, to check that going back to that
