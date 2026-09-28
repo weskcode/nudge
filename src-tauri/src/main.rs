@@ -182,11 +182,11 @@ fn parse_config(text: &str) -> Option<Config> {
     // one, which reads as 1) in a hand-edited file would change or delete
     // several at once; later repeats get fresh ids
     let mut seen = std::collections::HashSet::new();
-    let mut last_id = config.nudges.iter().map(|n| n.id).max().unwrap_or(0);
-    for nudge in &mut config.nudges {
-        if !seen.insert(nudge.id) {
-            last_id += 1;
-            nudge.id = last_id;
+    for index in 0..config.nudges.len() {
+        if !seen.insert(config.nudges[index].id) {
+            let id = new_id(&config.nudges);
+            config.nudges[index].id = id;
+            seen.insert(id);
         }
     }
     // a lone nudge has no switch of its own; the master switch covers it
@@ -194,6 +194,16 @@ fn parse_config(text: &str) -> Option<Config> {
         only.enabled = true;
     }
     Some(config)
+}
+
+// one above the highest id, or the lowest free id when that would pass
+// u32::MAX (only a hand-edited file gets that high)
+fn new_id(nudges: &[Nudge]) -> u32 {
+    let taken = |id: u32| nudges.iter().any(|n| n.id == id);
+    let highest = nudges.iter().map(|n| n.id).max().unwrap_or(0);
+    highest
+        .checked_add(1)
+        .unwrap_or_else(|| (1..=u32::MAX).find(|&id| !taken(id)).unwrap_or(0))
 }
 
 // the first nudge is also written at the top level, where older builds look,
@@ -1048,7 +1058,7 @@ fn add_nudge(app: AppHandle) -> Option<u32> {
         if config.nudges.len() >= MAX_NUDGES {
             return None;
         }
-        let id = config.nudges.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+        let id = new_id(&config.nudges);
         let nudge = Nudge {
             id,
             message: "New nudge".into(),
@@ -1391,8 +1401,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        config_json, hms, parse_config, replace_file, AlsoNow, Config, Nudge, NudgeState,
-        OverlayState, PublicState,
+        config_json, hms, new_id, parse_config, replace_file, AlsoNow, Config, Nudge,
+        NudgeState, OverlayState, PublicState,
     };
     use serde::Deserialize;
 
@@ -1481,6 +1491,26 @@ mod tests {
         let loaded: Vec<(u32, &str)> =
             config.nudges.iter().map(|n| (n.id, n.message.as_str())).collect();
         assert_eq!(loaded, vec![(2, "a"), (3, "b"), (1, "c"), (4, "d")]);
+    }
+
+    #[test]
+    fn ids_at_the_top_of_the_range_stay_unique() {
+        let text = serde_json::json!({
+            "enabled_on_wake": true, "reset_on_wake": true, "launch_at_login": false,
+            "count_total": 0,
+            "nudges": [
+                {"id": u32::MAX, "message": "a"},
+                {"id": u32::MAX, "message": "b"},
+                {"id": 0, "message": "c"}
+            ]
+        })
+        .to_string();
+        let config = parse_config(&text).unwrap();
+        let loaded: Vec<(u32, &str)> =
+            config.nudges.iter().map(|n| (n.id, n.message.as_str())).collect();
+        assert_eq!(loaded, vec![(u32::MAX, "a"), (1, "b"), (0, "c")]);
+        // the next nudge added takes a free id rather than wrapping to 0
+        assert_eq!(new_id(&config.nudges), 2);
     }
 
     #[test]
