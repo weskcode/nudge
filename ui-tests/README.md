@@ -1,5 +1,25 @@
 # UI snapshots (point-in-time reference)
 
+## 2026-09-27, multiple nudges
+
+Captured from a debug build of the working tree (after `b9117d1`, not yet
+committed) on macOS 27, light appearance, Retina (2x), with
+`screencapture -l <window id>`. The build ran with `HOME` pointed at a temp
+folder and three nudges in its config.json, so the installed app and its
+settings were left alone. Pages were switched with AX press actions.
+
+- `settings-nudges-2026-09-27.png`: the Schedule page with the nudge picker
+  in the pane bar and the "This nudge is on" switch (shown with 2+ nudges).
+- `nudge-picker-2026-09-27.png`: the picker open: each nudge, then New
+  Nudge… and Delete.
+- `settings-symbol-2026-09-27.png`: the Reminder page for a nudge using the
+  eye symbol, the Forest style and the Ring layout, with the Symbol row.
+- `tray-nudges-2026-09-27.png`: the menu bar menu with one countdown line per
+  nudge, soonest first.
+
+The overlay's "Also now" line was not captured from the app, because showing
+the reminder takes over every screen.
+
 ## 2026-09-27
 
 Captured from the signed release build on macOS 27, Retina (2x), with
