@@ -825,7 +825,8 @@ fn take_break_now(app: &AppHandle) {
     };
     let look = due.first().copied().unwrap_or(first);
     if show_overlay(app, look, due, true) {
-        state.schedule.lock().unwrap().end_pause();
+        let timers = enabled_timers(&nudges(app));
+        state.schedule.lock().unwrap().end_pause(&timers, Instant::now());
     }
 }
 

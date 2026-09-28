@@ -126,9 +126,17 @@ impl Schedule {
         }
     }
 
-    // a break taken on purpose ends a pause, as it did with one reminder
-    pub fn end_pause(&mut self) {
-        self.paused_until = None;
+    // a break taken on purpose ends a pause, as it did with one reminder: the
+    // nudges the pause was holding back start a full interval over from now
+    pub fn end_pause(&mut self, timers: &[(u32, Duration)], now: Instant) {
+        let Some(until) = self.paused_until.take() else {
+            return;
+        };
+        for &(id, after) in timers {
+            if self.next.get(&id) == Some(&until) {
+                self.next.insert(id, now + after);
+            }
+        }
     }
 
     // a deleted nudge stops waiting and leaves the reminder on screen
@@ -358,11 +366,16 @@ mod tests {
     #[test]
     fn a_break_taken_during_a_pause_ends_it() {
         let now = Instant::now();
-        let mut schedule = on_with(now, &[(1, 600)]);
-        schedule.pause(&[1], now + Duration::from_secs(7200));
+        let mut schedule = on_with(now, &[(1, 600), (2, 900), (3, 9000)]);
+        schedule.pause(&[1, 2, 3], now + Duration::from_secs(7200));
         let due = schedule.due_now(now, Duration::from_secs(60), true);
         schedule.open(showing(1, due, now));
-        schedule.end_pause();
+        let timers = [(1, MIN * 30), (2, MIN * 20), (3, MIN * 60)];
+        schedule.end_pause(&timers, now);
+        // the pause held 2 back, so it starts over; 3 was due after the pause
+        // anyway and keeps its time
+        assert_eq!(schedule.remaining(2, now), 1200);
+        assert_eq!(schedule.remaining(3, now), 9000);
         let shown = schedule.close().unwrap();
         let timers: Vec<_> = shown.due.iter().map(|&id| (id, Duration::from_secs(1800))).collect();
         schedule.resume(&timers, now);
