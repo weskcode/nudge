@@ -368,18 +368,31 @@ mod tests {
         let now = Instant::now();
         let mut schedule = on_with(now, &[(1, 600), (2, 900), (3, 9000)]);
         schedule.pause(&[1, 2, 3], now + Duration::from_secs(7200));
+        // switched on in Settings mid-pause, so it waits for the pause too
+        schedule.resume(&[(4, MIN * 30)], now);
+        assert_eq!(schedule.remaining(4, now), 7200);
         let due = schedule.due_now(now, Duration::from_secs(60), true);
         schedule.open(showing(1, due, now));
-        let timers = [(1, MIN * 30), (2, MIN * 20), (3, MIN * 60)];
+        let timers = [(1, MIN * 30), (2, MIN * 20), (3, MIN * 60), (4, MIN * 30)];
         schedule.end_pause(&timers, now);
-        // the pause held 2 back, so it starts over; 3 was due after the pause
-        // anyway and keeps its time
+        // the pause held 2 and 4 back, so they start over; 3 was due after
+        // the pause anyway and keeps its time
         assert_eq!(schedule.remaining(2, now), 1200);
+        assert_eq!(schedule.remaining(4, now), 1800);
         assert_eq!(schedule.remaining(3, now), 9000);
         let shown = schedule.close().unwrap();
         let timers: Vec<_> = shown.due.iter().map(|&id| (id, Duration::from_secs(1800))).collect();
         schedule.resume(&timers, now);
         assert_eq!(schedule.remaining(1, now), 1800);
+    }
+
+    #[test]
+    fn a_break_with_no_pause_moves_no_timer() {
+        let now = Instant::now();
+        let mut schedule = on_with(now, &[(1, 600), (2, 900)]);
+        schedule.end_pause(&[(1, MIN), (2, MIN)], now);
+        assert_eq!(schedule.remaining(1, now), 600);
+        assert_eq!(schedule.remaining(2, now), 900);
     }
 
     #[test]
