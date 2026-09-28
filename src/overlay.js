@@ -1,4 +1,5 @@
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 
@@ -36,43 +37,69 @@ function breakLabel(secs) {
   return secs % 60 === 0 ? plural(secs / 60, "minute") : `${secs} seconds`;
 }
 
-invoke("get_state").then((s) => {
-  document.body.classList.add(`style-${s.style}`, `size-${s.text_size}`, `layout-${s.layout}`);
-  if (!isMac) document.body.classList.add("no-blur");
+// other nudges that came due with this one, each with its symbol
+function renderAlso(also) {
+  const line = $("overlay-also");
+  const items = also.map((nudge) => {
+    const item = document.createElement("span");
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `#s-${nudge.symbol}`);
+    icon.setAttribute("aria-hidden", "true");
+    icon.append(use);
+    item.append(icon, nudge.message);
+    return item;
+  });
+  const label = document.createElement("span");
+  label.className = "lbl";
+  label.textContent = "Also now";
+  line.replaceChildren(...(items.length ? [label, ...items] : []));
+}
 
-  $("overlay-text").textContent = s.message;
+// listen first, so a nudge that joins while the page asks isn't missed; the
+// look (style, symbol, break length, snooze) is the nudge the reminder opened for
+listen("nudge://overlay", (event) => renderAlso(event.payload.also))
+  .catch(() => {})
+  .then(() => invoke("get_overlay"))
+  .then((s) => {
+    document.body.classList.add(`style-${s.style}`, `size-${s.text_size}`, `layout-${s.layout}`);
+    if (!isMac) document.body.classList.add("no-blur");
 
-  if (s.break_ideas) {
-    $("overlay-idea").textContent = BREAK_IDEAS[s.count_total % BREAK_IDEAS.length];
-    $("overlay-idea").hidden = false;
-    $("overlay").setAttribute("aria-describedby", "overlay-idea");
-  }
+    $("glyph-symbol").setAttribute("href", `#s-${s.symbol}`);
+    $("overlay-text").textContent = s.message;
 
-  if (s.snooze_mins > 0) {
-    snoozeMins = s.snooze_mins;
-    $("snooze").textContent = `Snooze ${s.snooze_mins} min`;
-    $("snooze").hidden = false;
-  }
+    if (s.break_ideas) {
+      $("overlay-idea").textContent = BREAK_IDEAS[s.count_total % BREAK_IDEAS.length];
+      $("overlay-idea").hidden = false;
+    }
+    $("overlay").setAttribute("aria-describedby", s.break_ideas ? "overlay-idea overlay-also" : "overlay-also");
+    renderAlso(s.also);
 
-  if (s.auto_dismiss_secs > 0) {
-    document.body.classList.add("has-ring");
-    document.body.style.setProperty("--break", `${s.auto_dismiss_secs}s`);
-    $("overlay-hint").textContent = `Ends on its own in ${breakLabel(s.auto_dismiss_secs)}, or press any key`;
-  }
+    if (s.snooze_mins > 0) {
+      snoozeMins = s.snooze_mins;
+      $("snooze").textContent = `Snooze ${s.snooze_mins} min`;
+      $("snooze").hidden = false;
+    }
 
-  // SVG elements have no .hidden property; the ring layout always shows the ring
-  if (s.auto_dismiss_secs > 0 || s.layout === "ring") document.querySelector(".ring").removeAttribute("hidden");
+    if (s.auto_dismiss_secs > 0) {
+      document.body.classList.add("has-ring");
+      document.body.style.setProperty("--break", `${s.auto_dismiss_secs}s`);
+      $("overlay-hint").textContent = `Ends on its own in ${breakLabel(s.auto_dismiss_secs)}, or press any key`;
+    }
 
-  if (s.show_counts) {
-    $("overlay-stats").textContent =
-      `${s.count_session} since your ${device} woke  ·  ${s.count_total} total`;
-    $("overlay-stats").hidden = false;
-  }
+    // SVG elements have no .hidden property; the ring layout always shows the ring
+    if (s.auto_dismiss_secs > 0 || s.layout === "ring") document.querySelector(".ring").removeAttribute("hidden");
 
-  // give VoiceOver and the keyboard a control to start from; Enter and Space on
-  // a button are already kept out of press-any-key
-  $("done").focus({ focusVisible: false });
-});
+    if (s.show_counts) {
+      $("overlay-stats").textContent =
+        `${s.count_session} since your ${device} woke  ·  ${s.count_total} total`;
+      $("overlay-stats").hidden = false;
+    }
+
+    // give VoiceOver and the keyboard a control to start from; Enter and Space on
+    // a button are already kept out of press-any-key
+    $("done").focus({ focusVisible: false });
+  });
 
 // fade out before the window closes; the first request wins
 function leave(command, args) {

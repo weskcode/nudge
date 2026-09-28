@@ -27,6 +27,11 @@ reminder pattern all come from `remindful`.
   fullscreen apps and workspaces; on macOS it blurs what is behind it
 - Click, press Done, or press any key to dismiss; optional Snooze button
 - Interval presets of 15/30/45/60/90 minutes plus a custom value, applied live
+- Up to 8 nudges, each with its own message, interval, symbol, look and
+  break settings. The pop-up at the top of Settings picks the one to edit and
+  adds or deletes nudges. The menu shows a countdown line for each, and nudges
+  that come due within a minute of each other share one reminder, with the
+  others listed under "Also now"
 - Settings persist between runs and follow light and dark mode
 
 ### Make it yours
@@ -34,6 +39,8 @@ reminder pattern all come from `remindful`.
 Options chosen to keep reminders noticeable, kind and low friction, which
 matters most if you have ADHD or tend to hyperfocus:
 
+- A symbol for each nudge: walking figure, water drop, eye, breath, pill or
+  bell
 - Your own message, plus an optional break idea that changes every time
   ("Refill your water", "Jot down where you left off") so the reminder does
   not fade into the background

@@ -26,7 +26,13 @@
     <symbol id="i-restart" viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4.5V9h-4.5"/></symbol>
     <symbol id="i-login" viewBox="0 0 24 24"><path d="M10 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20H10M14 16l4-4-4-4M18 12H9"/></symbol>
     <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><rect x="7.5" y="9" width="9" height="6" rx="1.5"/></symbol>
-    <symbol id="i-figure" viewBox="0 0 24 24"><circle cx="13" cy="4" r="1.8"/><path d="M9 21l2.5-6 2.5 2v4M7.5 11.5l2-3.5 4 1 2.5 3 2.5.5M11.5 15l1-6"/></symbol>
+    <!-- a nudge's symbol, on its tile and its reminder (overlay.html has the same set) -->
+    <symbol id="s-figure" viewBox="0 0 24 24"><circle cx="13" cy="4" r="1.8"/><path d="M9 21l2.5-6 2.5 2v4M7.5 11.5l2-3.5 4 1 2.5 3 2.5.5M11.5 15l1-6"/></symbol>
+    <symbol id="s-drop" viewBox="0 0 24 24"><path d="M12 3.5s-6 6.4-6 10.8a6 6 0 0 0 12 0C18 9.9 12 3.5 12 3.5z"/></symbol>
+    <symbol id="s-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="s-breath" viewBox="0 0 24 24"><path d="M3.5 8.5h10.5a2.5 2.5 0 1 0-2.5-2.5M3.5 12h15a2.5 2.5 0 1 1-2.5 2.5M3.5 15.5h7"/></symbol>
+    <symbol id="s-pill" viewBox="0 0 24 24"><g transform="rotate(-45 12 12)"><rect x="3" y="8.5" width="18" height="7" rx="3.5"/><path d="M12 8.5v7"/></g></symbol>
+    <symbol id="s-bell" viewBox="0 0 24 24"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14zM10 20.5h4"/></symbol>
   </svg>
 
   <div class="app">
@@ -54,10 +60,16 @@
     <main class="pane">
       <header class="pane-bar" data-tauri-drag-region>
         <h2 id="page-title" data-tauri-drag-region>Schedule</h2>
+        <span class="grow" data-tauri-drag-region></span>
+        <!-- the nudge the Schedule, Reminder and Break pages edit -->
+        <label class="picker" id="picker">
+          <span class="tile n-frosted" id="picker-tile" aria-hidden="true"><svg><use id="picker-symbol" href="#s-figure"/></svg></span>
+          <select id="nudge-select" aria-label="Nudge"></select>
+        </label>
       </header>
 
       <div class="pages">
-        <section class="page" id="page-schedule" role="tabpanel" aria-labelledby="tab-schedule" data-title="Schedule">
+        <section class="page" id="page-schedule" data-nudge role="tabpanel" aria-labelledby="tab-schedule" data-title="Schedule">
           <div class="group countdown">
             <svg class="dial" viewBox="0 0 64 64" aria-hidden="true">
               <circle class="dial-track" cx="32" cy="32" r="28" />
@@ -92,11 +104,16 @@
                 </div>
               </div>
             </div>
+            <div class="row" id="nudge-on-row" hidden>
+              <span class="tile t-green"><svg><use href="#i-sun"/></svg></span>
+              <label class="text" for="nudge-enabled">This nudge is on</label>
+              <input id="nudge-enabled" type="checkbox" switch />
+            </div>
           </div>
           <p class="note">Minutes between reminders. Change it any time; the timer restarts.</p>
         </section>
 
-        <section class="page" id="page-reminder" role="tabpanel" aria-labelledby="tab-reminder" data-title="Reminder" hidden>
+        <section class="page" id="page-reminder" data-nudge role="tabpanel" aria-labelledby="tab-reminder" data-title="Reminder" hidden>
           <div class="group look">
             <div class="preview" id="live-preview" aria-hidden="true">
               <div class="pv-desktop"></div>
@@ -107,7 +124,7 @@
               <div class="pv-tint pv-midnight"></div>
               <div class="pv-content" id="pv-content">
                 <span class="pv-glyph">
-                  <svg class="pv-figure"><use href="#i-figure"/></svg>
+                  <svg class="pv-figure"><use id="pv-symbol" href="#s-figure"/></svg>
                   <svg class="pv-ring" viewBox="0 0 48 48"><circle cx="24" cy="24" r="22"/></svg>
                 </span>
                 <b class="pv-message" id="pv-message">Time to step away</b>
@@ -141,6 +158,18 @@
               <input id="message" type="text" maxlength="80" placeholder="Time to step away" spellcheck="true" />
             </div>
             <div class="row">
+              <span class="tile n-frosted" id="symbol-tile"><svg><use id="symbol-tile-symbol" href="#s-figure"/></svg></span>
+              <span class="text" id="l-symbol">Symbol</span>
+              <div class="segmented symbols" role="radiogroup" aria-labelledby="l-symbol" id="symbol">
+                <label><input type="radio" name="symbol" value="figure" aria-label="Walk" /><span><svg><use href="#s-figure"/></svg></span></label>
+                <label><input type="radio" name="symbol" value="drop" aria-label="Water" /><span><svg><use href="#s-drop"/></svg></span></label>
+                <label><input type="radio" name="symbol" value="eye" aria-label="Eyes" /><span><svg><use href="#s-eye"/></svg></span></label>
+                <label><input type="radio" name="symbol" value="breath" aria-label="Breathe" /><span><svg><use href="#s-breath"/></svg></span></label>
+                <label><input type="radio" name="symbol" value="pill" aria-label="Medication" /><span><svg><use href="#s-pill"/></svg></span></label>
+                <label><input type="radio" name="symbol" value="bell" aria-label="Bell" /><span><svg><use href="#s-bell"/></svg></span></label>
+              </div>
+            </div>
+            <div class="row">
               <span class="tile t-yellow"><svg><use href="#i-bulb"/></svg></span>
               <label class="text" for="break-ideas">Suggest a break idea<small>A different small action each time</small></label>
               <input id="break-ideas" type="checkbox" switch />
@@ -167,7 +196,7 @@
           </div>
         </section>
 
-        <section class="page" id="page-break" role="tabpanel" aria-labelledby="tab-break" data-title="Break" hidden>
+        <section class="page" id="page-break" data-nudge role="tabpanel" aria-labelledby="tab-break" data-title="Break" hidden>
           <div class="group icons">
             <div class="row">
               <span class="tile t-green"><svg><use href="#i-hourglass"/></svg></span>

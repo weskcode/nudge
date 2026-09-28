@@ -144,6 +144,23 @@ body {
 .size-large #overlay-idea { font-size: clamp(1.2rem, 3vmin, 1.75rem); }
 .size-xlarge #overlay-idea { font-size: clamp(1.35rem, 3.6vmin, 2.1rem); }
 
+/* other nudges that came due with this one: one quiet line */
+.also-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 14px;
+  font-size: clamp(1rem, 2.2vmin, 1.25rem);
+  color: rgba(255, 255, 255, 0.9);
+}
+.also-line span { display: inline-flex; align-items: center; gap: 7px; }
+.also-line svg { width: 18px; height: 18px; fill: none; stroke: #fff; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0.9; }
+.also-line .lbl { color: rgba(255, 255, 255, 0.6); }
+.also-line:empty { margin-top: 0; }
+.size-large .also-line { font-size: clamp(1.15rem, 2.7vmin, 1.55rem); }
+.size-xlarge .also-line { font-size: clamp(1.3rem, 3.2vmin, 1.85rem); }
+
 .overlay-actions {
   display: flex;
   gap: 12px;
@@ -334,8 +351,40 @@ body {
   flex-direction: column;
   background: var(--content);
 }
-.pane-bar { flex: none; display: flex; align-items: center; height: 46px; padding: 0 24px; }
+.pane-bar { flex: none; display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 24px; }
 .pane-bar h2 { font-size: 15px; font-weight: 700; margin: 0; }
+.pane-bar .grow { flex: 1; align-self: stretch; }
+
+/* the nudge picker: a pop-up led by the nudge's tile */
+.picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 0 3px 0 4px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--track);
+}
+.picker .tile { width: 20px; height: 20px; border-radius: 6px; }
+.picker .tile svg { width: 13px; height: 13px; }
+.picker select {
+  max-width: 220px;
+  padding: 3px 26px 3px 0;
+  font-weight: 500;
+  text-align: left;
+  text-align-last: left;
+  text-overflow: ellipsis;
+  background-position: right 0 center;
+}
+.picker select:hover { background-color: transparent; }
+
+/* a nudge's tile takes the colour of its reminder style */
+.n-frosted { background: linear-gradient(#9aa0ad, #5f6470); }
+.n-dusk { background: linear-gradient(#8a5bc4, #d0705f); }
+.n-ocean { background: linear-gradient(#3f8fd6, #173f80); }
+.n-forest { background: linear-gradient(#45b287, #17583f); }
+.n-midnight { background: linear-gradient(#3a3a44, #0d0d12); }
 
 /* content softens out under the bar as it scrolls, like the scroll edge effect */
 .pages {
@@ -360,7 +409,7 @@ h3 { font-size: 13px; font-weight: 600; margin: 0 0 -10px 12px; }
   min-height: 44px;
   padding: 8px 14px;
 }
-.row + .row::before, .reveal .row::before {
+.row + .row::before, .reveal .row::before, .reveal + .row::before {
   content: "";
   position: absolute;
   top: 0;
@@ -370,7 +419,7 @@ h3 { font-size: 13px; font-weight: 600; margin: 0 0 -10px 12px; }
   transform: scaleY(0.5);
   background: var(--separator);
 }
-.icons .row + .row::before, .icons .reveal .row::before { left: 48px; }
+.icons .row + .row::before, .icons .reveal .row::before, .icons .reveal + .row::before { left: 48px; }
 .row .text { flex: 1; min-width: 0; }
 .row small { display: block; margin-top: 1px; font-size: 11px; color: var(--secondary); }
 
@@ -454,6 +503,8 @@ button {
 }
 .segmented input:checked + span { background: var(--control); box-shadow: var(--raised); }
 .segmented input:focus-visible + span { outline: 3px solid color-mix(in srgb, var(--accent) 50%, transparent); }
+.symbols span { display: grid; place-items: center; padding: 3px 9px; }
+.symbols svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ----- schedule: countdown dial ----- */
 
@@ -468,7 +519,7 @@ button {
   transition: stroke-dashoffset 1s linear, opacity var(--t-med) var(--ease-out);
 }
 .dial-fill.no-anim { transition: none; }
-.is-off .dial-fill { opacity: 0; }
+.is-off .dial-fill, .nudge-off .dial-fill { opacity: 0; }
 .countdown-label, .countdown-detail { font-size: 12px; color: var(--secondary); }
 .countdown-time {
   font-size: 28px;

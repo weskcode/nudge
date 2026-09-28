@@ -1,6 +1,9 @@
 // no console window behind the tray app on Windows release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod schedule;
+
+use schedule::{hms, Schedule, Showing};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -13,34 +16,59 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
 const CREDITS_URL: &str = "https://github.com/brettferdosi/remindful";
 
-#[derive(Serialize, Deserialize, Clone)]
-struct Config {
-    interval_secs: u32,
+// one reminder: what it says, how often, and how it looks. before there could
+// be several, these fields sat at the top of config.json; any a file lacks
+// take the defaults the single reminder had
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
+struct Nudge {
+    id: u32,
+    enabled: bool,
     message: String,
+    symbol: String,
+    interval_secs: u32,
+    play_sound: bool,
+    auto_dismiss_secs: u32,
+    break_ideas: bool,
+    style: String,
+    text_size: String,
+    show_counts: bool,
+    sound: String,
+    snooze_mins: u32,
+    layout: String,
+}
+
+impl Default for Nudge {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            enabled: true,
+            message: "Time to step away".into(),
+            symbol: "figure".into(),
+            interval_secs: 30 * 60,
+            play_sound: true,
+            auto_dismiss_secs: 0,
+            break_ideas: true,
+            style: "frosted".into(),
+            text_size: "standard".into(),
+            show_counts: true,
+            sound: "chime".into(),
+            snooze_mins: 5,
+            layout: "classic".into(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+struct Config {
     enabled_on_wake: bool,
     reset_on_wake: bool,
-    play_sound: bool,
     launch_at_login: bool,
     count_total: u32,
-    #[serde(default)]
-    auto_dismiss_secs: u32,
-    // customization added after 0.1.0; defaults keep older config files valid
-    #[serde(default = "default_true")]
-    break_ideas: bool,
-    #[serde(default = "default_style")]
-    style: String,
-    #[serde(default = "default_text_size")]
-    text_size: String,
-    #[serde(default = "default_true")]
-    show_counts: bool,
-    #[serde(default = "default_sound")]
-    sound: String,
-    #[serde(default = "default_snooze")]
-    snooze_mins: u32,
     #[serde(default = "default_menu_bar_timer")]
     menu_bar_timer: String,
-    #[serde(default = "default_layout")]
-    layout: String,
+    #[serde(default)]
+    nudges: Vec<Nudge>,
 }
 
 const STYLES: &[&str] = &["frosted", "dusk", "ocean", "forest", "midnight"];
@@ -48,78 +76,81 @@ const TEXT_SIZES: &[&str] = &["standard", "large", "xlarge"];
 const SOUNDS: &[&str] = &["chime", "glass", "hero", "ping", "purr", "submarine"];
 const MENU_BAR_TIMERS: &[&str] = &["never", "last5", "always"];
 const LAYOUTS: &[&str] = &["classic", "card", "ring"];
+const SYMBOLS: &[&str] = &["figure", "drop", "eye", "breath", "pill", "bell"];
+const MAX_NUDGES: usize = 8;
 
-fn default_true() -> bool {
-    true
-}
-fn default_style() -> String {
-    "frosted".into()
-}
-fn default_text_size() -> String {
-    "standard".into()
-}
-fn default_sound() -> String {
-    "chime".into()
-}
-fn default_snooze() -> u32 {
-    5
-}
+// a nudge due this soon comes along with a reminder that is opening, rather
+// than following it a minute later
+const JOIN_WINDOW: Duration = Duration::from_secs(60);
+
 fn default_menu_bar_timer() -> String {
     "never".into()
-}
-fn default_layout() -> String {
-    "classic".into()
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            interval_secs: 30 * 60,
-            message: "Time to step away".into(),
             enabled_on_wake: true,
             reset_on_wake: true,
-            play_sound: true,
             launch_at_login: false,
             count_total: 0,
-            auto_dismiss_secs: 0,
-            break_ideas: true,
-            style: default_style(),
-            text_size: default_text_size(),
-            show_counts: true,
-            sound: default_sound(),
-            snooze_mins: default_snooze(),
             menu_bar_timer: default_menu_bar_timer(),
-            layout: default_layout(),
+            nudges: vec![Nudge::default()],
         }
     }
 }
 
+// what the Settings pages show: the global options, then each nudge with the
+// seconds until it fires (0 while on screen, -1 with no timer)
 #[derive(Serialize, Clone)]
 struct PublicState {
-    #[serde(flatten)]
-    config: Config,
+    enabled_on_wake: bool,
+    reset_on_wake: bool,
+    launch_at_login: bool,
+    menu_bar_timer: String,
+    count_total: u32,
     count_session: u32,
     enabled: bool,
     showing: bool,
+    nudges: Vec<NudgeState>,
+}
+
+#[derive(Serialize, Clone)]
+struct NudgeState {
+    #[serde(flatten)]
+    nudge: Nudge,
     remaining_secs: i64,
+}
+
+// what a reminder window shows: the look of the nudge it opened for, and a
+// line for each other nudge it answers
+#[derive(Serialize, Clone)]
+struct OverlayState {
+    #[serde(flatten)]
+    look: Nudge,
+    also: Vec<AlsoNow>,
+    count_total: u32,
+    count_session: u32,
+}
+
+#[derive(Serialize, Clone)]
+struct AlsoNow {
+    message: String,
+    symbol: String,
 }
 
 struct App {
     config: Mutex<Config>,
-    next_fire: Mutex<Option<Instant>>,
-    showing: Mutex<bool>,
+    // take after config, and never hold across a window, menu or tray call:
+    // those run on the main thread, where the overlay focus handler takes it
+    schedule: Mutex<Schedule>,
     count_session: Mutex<u32>,
-    overlay_seq: Mutex<u32>,
-    overlay_windows: Mutex<Vec<String>>,
-    countdown_item: Mutex<Option<MenuItem<Wry>>>,
+    menu: Mutex<Option<Menu<Wry>>>,
+    countdown_items: Mutex<Vec<MenuItem<Wry>>>,
     toggle_item: Mutex<Option<MenuItem<Wry>>>,
     tray: Mutex<Option<TrayIcon<Wry>>>,
     pause_menu: Mutex<Option<Submenu<Wry>>>,
     last_label: Mutex<String>,
-    // set while a preview (or a break taken with reminders off) is showing: the
-    // schedule to put back on dismissal instead of starting a new interval
-    restore_fire: Mutex<Option<Option<Instant>>>,
-    shown_at: Mutex<Instant>,
 }
 
 // keys typed in the moment a reminder opens were meant for another app;
@@ -134,44 +165,121 @@ fn config_path() -> PathBuf {
     dir.join("config.json")
 }
 
+// config.json from any version: before there could be several nudges, the one
+// reminder's settings sat at the top level, and they become the first nudge
+fn parse_config(text: &str) -> Option<Config> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let mut config: Config = serde_json::from_value(value.clone()).ok()?;
+    if config.nudges.is_empty() {
+        let mut first: Nudge = serde_json::from_value(value).ok()?;
+        first.id = 1;
+        config.nudges.push(first);
+    }
+    // a lone nudge has no switch of its own; the master switch covers it
+    if let [only] = config.nudges.as_mut_slice() {
+        only.enabled = true;
+    }
+    Some(config)
+}
+
+// the first nudge is also written at the top level, where older builds look,
+// so going back to one keeps the main reminder (it drops the rest if it saves)
+fn config_json(config: &Config) -> serde_json::Value {
+    let mut value = serde_json::to_value(config).unwrap_or_default();
+    let first = config.nudges.first().and_then(|n| serde_json::to_value(n).ok());
+    if let (Some(serde_json::Value::Object(fields)), Some(top)) = (first, value.as_object_mut()) {
+        for (key, field) in fields {
+            if key != "id" {
+                top.insert(key, field);
+            }
+        }
+    }
+    value
+}
+
 fn load_config() -> Config {
     fs::read_to_string(config_path())
         .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
+        .and_then(|text| parse_config(&text))
         .unwrap_or_default()
 }
 
 fn save_config(app: &AppHandle) {
-    let state = app.state::<App>();
-    let config = state.config.lock().unwrap();
-    if let Ok(json) = serde_json::to_string_pretty(&*config) {
-        if let Err(error) = fs::write(config_path(), json) {
+    let json = config_json(&app.state::<App>().config.lock().unwrap());
+    if let Ok(text) = serde_json::to_string_pretty(&json) {
+        if let Err(error) = fs::write(config_path(), text) {
             println!("saving settings failed: {error:?}");
         }
     }
 }
 
+fn nudges(app: &AppHandle) -> Vec<Nudge> {
+    app.state::<App>().config.lock().unwrap().nudges.clone()
+}
+
+// each enabled nudge with its interval, for starting timers
+fn enabled_timers(nudges: &[Nudge]) -> Vec<(u32, Duration)> {
+    nudges
+        .iter()
+        .filter(|n| n.enabled)
+        .map(|n| (n.id, Duration::from_secs(n.interval_secs as u64)))
+        .collect()
+}
+
 fn snapshot(app: &AppHandle) -> PublicState {
     let state = app.state::<App>();
     let config = state.config.lock().unwrap().clone();
-    let next = *state.next_fire.lock().unwrap();
-    let showing = *state.showing.lock().unwrap();
-    let session = *state.count_session.lock().unwrap();
-    let remaining = if showing {
-        0
-    } else if next.is_none() {
-        -1
-    } else {
-        next.unwrap()
-            .saturating_duration_since(Instant::now())
-            .as_secs() as i64
-    };
+    let count_session = *state.count_session.lock().unwrap();
+    let schedule = state.schedule.lock().unwrap();
+    let now = Instant::now();
     PublicState {
-        config,
-        count_session: session,
-        enabled: is_reminders_enabled(app),
-        showing,
-        remaining_secs: remaining,
+        nudges: config
+            .nudges
+            .into_iter()
+            .map(|nudge| NudgeState {
+                remaining_secs: schedule.remaining(nudge.id, now),
+                nudge,
+            })
+            .collect(),
+        enabled_on_wake: config.enabled_on_wake,
+        reset_on_wake: config.reset_on_wake,
+        launch_at_login: config.launch_at_login,
+        menu_bar_timer: config.menu_bar_timer,
+        count_total: config.count_total,
+        count_session,
+        enabled: schedule.on,
+        showing: schedule.showing.is_some(),
+    }
+}
+
+fn overlay_state(app: &AppHandle) -> OverlayState {
+    let state = app.state::<App>();
+    let config = state.config.lock().unwrap().clone();
+    let count_session = *state.count_session.lock().unwrap();
+    let (look, due) = state
+        .schedule
+        .lock()
+        .unwrap()
+        .showing
+        .as_ref()
+        .map(|s| (s.look, s.due.clone()))
+        .unwrap_or_default();
+    let find = |id: u32| config.nudges.iter().find(|n| n.id == id);
+    let also = due
+        .iter()
+        .filter(|&&id| id != look)
+        .filter_map(|&id| find(id))
+        .map(|n| AlsoNow {
+            message: n.message.clone(),
+            symbol: n.symbol.clone(),
+        })
+        .collect();
+    OverlayState {
+        // a nudge deleted while its reminder is up falls back to the first
+        look: find(look).or(config.nudges.first()).cloned().unwrap_or_default(),
+        also,
+        count_total: config.count_total,
+        count_session,
     }
 }
 
@@ -179,73 +287,39 @@ fn broadcast(app: &AppHandle) {
     let _ = app.emit("nudge://state", snapshot(app));
 }
 
-fn is_reminders_enabled(app: &AppHandle) -> bool {
-    let state = app.state::<App>();
-    if let Some(restore) = *state.restore_fire.lock().unwrap() {
-        return restore.is_some();
+fn is_on(app: &AppHandle) -> bool {
+    app.state::<App>().schedule.lock().unwrap().on
+}
+
+// the master switch: on starts every enabled nudge's timer over, off stops
+// them all and takes down any reminder
+fn set_reminders(app: &AppHandle, on: bool) {
+    if !on {
+        close_windows(app);
     }
-    state.next_fire.lock().unwrap().is_some() || *state.showing.lock().unwrap()
-}
-
-fn enable_reminders(app: &AppHandle) {
-    let state = app.state::<App>();
-    *state.restore_fire.lock().unwrap() = None;
-    let interval = state.config.lock().unwrap().interval_secs;
-    *state.next_fire.lock().unwrap() = Some(Instant::now() + Duration::from_secs(interval as u64));
-    refresh_tray(app);
-    broadcast(app);
-}
-
-fn disable_reminders(app: &AppHandle) {
-    let state = app.state::<App>();
-    *state.next_fire.lock().unwrap() = None;
-    if *state.showing.lock().unwrap() {
-        hide_overlay(app);
+    let timers = enabled_timers(&nudges(app));
+    {
+        let state = app.state::<App>();
+        let mut schedule = state.schedule.lock().unwrap();
+        schedule.on = on;
+        schedule.restart(&timers, Instant::now());
     }
     refresh_tray(app);
     broadcast(app);
 }
 
 fn toggle_reminders(app: &AppHandle) {
-    if is_reminders_enabled(app) {
-        disable_reminders(app);
-    } else {
-        enable_reminders(app);
-    }
+    set_reminders(app, !is_on(app));
 }
 
-fn hms(secs: u64) -> String {
-    let (hours, minutes, seconds) = (secs / 3600, (secs % 3600) / 60, secs % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes}:{seconds:02}")
+// short countdown shown beside the tray icon, per the "menu bar timer"
+// setting: to the soonest nudge, and hidden while a reminder is showing
+fn menu_bar_title(mode: &str, schedule: &Schedule, now: Instant) -> Option<String> {
+    if schedule.showing.is_some() {
+        return None;
     }
-}
-
-fn current_label(app: &AppHandle) -> String {
-    let state = app.state::<App>();
-    let next = *state.next_fire.lock().unwrap();
-    let showing = *state.showing.lock().unwrap();
-    if showing {
-        "Reminder showing".to_string()
-    } else if let Some(fire) = next {
-        format!(
-            "Reminder in {}",
-            hms(fire.saturating_duration_since(Instant::now()).as_secs())
-        )
-    } else {
-        "Reminders off".to_string()
-    }
-}
-
-// short countdown shown beside the tray icon, per the "menu bar timer" setting
-fn menu_bar_title(app: &AppHandle) -> Option<String> {
-    let state = app.state::<App>();
-    let mode = state.config.lock().unwrap().menu_bar_timer.clone();
-    let next = (*state.next_fire.lock().unwrap())?;
-    let secs = next.saturating_duration_since(Instant::now()).as_secs();
-    let show = match mode.as_str() {
+    let secs = schedule.soonest()?.saturating_duration_since(now).as_secs();
+    let show = match mode {
         "always" => true,
         "last5" => secs <= 5 * 60,
         _ => false,
@@ -255,11 +329,22 @@ fn menu_bar_title(app: &AppHandle) -> Option<String> {
 
 fn refresh_tray(app: &AppHandle) {
     let state = app.state::<App>();
-    let enabled = is_reminders_enabled(app);
-    let title = menu_bar_title(app);
+    let (mode, messages) = {
+        let config = state.config.lock().unwrap();
+        let messages: Vec<(u32, String)> =
+            config.nudges.iter().map(|n| (n.id, n.message.clone())).collect();
+        (config.menu_bar_timer.clone(), messages)
+    };
+    let names: Vec<(u32, &str)> = messages.iter().map(|(id, m)| (*id, m.as_str())).collect();
+    let now = Instant::now();
+    let (enabled, lines, title) = {
+        let schedule = state.schedule.lock().unwrap();
+        let title = menu_bar_title(&mode, &schedule, now);
+        (schedule.on, schedule.menu_lines(&names, now), title)
+    };
     // the title and on/off state are part of the cache key so mode changes and
     // the end of a preview (same label, reminders now off) apply immediately
-    let text = format!("{}|{}|{}", enabled, current_label(app), title.clone().unwrap_or_default());
+    let text = format!("{}|{}|{}", enabled, lines.join("\n"), title.clone().unwrap_or_default());
 
     {
         let mut last = state.last_label.lock().unwrap();
@@ -272,15 +357,20 @@ fn refresh_tray(app: &AppHandle) {
     // clone the handles and drop the guards first: each setter below blocks
     // until the main thread runs it, and the main thread may be waiting on
     // these same locks inside another refresh_tray call
-    let label = current_label(app);
-    let countdown = state.countdown_item.lock().unwrap().clone();
+    let menu = state.menu.lock().unwrap().clone();
+    let items = state.countdown_items.lock().unwrap().clone();
     let toggle = state.toggle_item.lock().unwrap().clone();
     let pause = state.pause_menu.lock().unwrap().clone();
     let tray = state.tray.lock().unwrap().clone();
 
-    if let Some(item) = countdown {
-        let _ = item.set_text(label.clone());
+    let items = match menu {
+        Some(menu) => sync_countdown_items(app, &menu, items, lines.len()),
+        None => items,
+    };
+    for (item, line) in items.iter().zip(&lines) {
+        let _ = item.set_text(line);
     }
+    *state.countdown_items.lock().unwrap() = items;
     if let Some(item) = toggle {
         let _ = item.set_text(if enabled {
             "Turn Reminders Off"
@@ -293,8 +383,9 @@ fn refresh_tray(app: &AppHandle) {
         let _ = menu.set_enabled(enabled);
     }
     if let Some(tray) = tray {
-        let _ = tray.set_tooltip(Some(label.clone()));
-        let _ = tray.set_title(title.as_deref());
+        let _ = tray.set_tooltip(lines.first());
+        // an empty title, not None: on macOS None leaves the last countdown up
+        let _ = tray.set_title(Some(title.as_deref().unwrap_or("")));
         let icon = if enabled {
             tauri::include_image!("icons/tray-on.png")
         } else {
@@ -304,20 +395,49 @@ fn refresh_tray(app: &AppHandle) {
     }
 }
 
-fn show_overlay(app: &AppHandle, counted: bool) {
-    if *app.state::<App>().showing.lock().unwrap() {
-        return;
+// one disabled countdown line per nudge at the top of the menu, added and
+// removed as the count changes; there is always at least one
+fn sync_countdown_items(
+    app: &AppHandle,
+    menu: &Menu<Wry>,
+    mut items: Vec<MenuItem<Wry>>,
+    count: usize,
+) -> Vec<MenuItem<Wry>> {
+    while items.len() < count {
+        let id = format!("countdown-{}", items.len());
+        let Ok(item) = MenuItem::with_id(app, id, "", false, None::<&str>) else {
+            break;
+        };
+        if menu.insert(&item, items.len()).is_err() {
+            break;
+        }
+        items.push(item);
     }
+    while items.len() > count.max(1) {
+        if let Some(item) = items.pop() {
+            let _ = menu.remove(&item);
+        }
+    }
+    items
+}
+
+// cover every screen with the reminder for `look`, answering the nudges in
+// `due` (none for a preview); false when no window could open
+fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> bool {
     let state = app.state::<App>();
-    let mut seq = state.overlay_seq.lock().unwrap();
-    *seq += 1;
-    let seq = *seq;
+    let seq = {
+        let mut schedule = state.schedule.lock().unwrap();
+        if schedule.showing.is_some() {
+            return false;
+        }
+        schedule.next_seq()
+    };
 
     let monitors = match app.available_monitors() {
         Ok(monitors) if !monitors.is_empty() => monitors,
         _ => match app.primary_monitor() {
             Ok(Some(monitor)) => vec![monitor],
-            _ => return,
+            _ => return false,
         },
     };
 
@@ -378,10 +498,9 @@ fn show_overlay(app: &AppHandle, counted: bool) {
         }
     }
 
-    // nothing on screen: leave the app out of the "showing" state so callers
-    // can roll back
+    // nothing on screen: leave the schedule as it was so callers can roll back
     if opened.is_empty() {
-        return;
+        return false;
     }
 
     // count only reminders that actually appeared
@@ -391,22 +510,31 @@ fn show_overlay(app: &AppHandle, counted: bool) {
         save_config(app);
     }
 
-    *state.overlay_windows.lock().unwrap() = opened;
-    *state.showing.lock().unwrap() = true;
-    *state.shown_at.lock().unwrap() = Instant::now();
+    let primary = opened.first().cloned();
+    state.schedule.lock().unwrap().open(Showing {
+        look,
+        due,
+        seq,
+        windows: opened,
+        shown_at: Instant::now(),
+    });
 
     #[cfg(target_os = "macos")]
     let _ = app.show();
     // take keyboard focus so "press any key" works and keystrokes stop going
     // to the app underneath; the build-time focus flag is ignored while the
     // app is inactive
-    let primary = state.overlay_windows.lock().unwrap().first().cloned();
     if let Some(window) = primary.and_then(|label| app.get_webview_window(&label)) {
         let _ = window.set_focus();
     }
-    let sound = {
+    // the sound and break length are the look nudge's
+    let (sound, break_secs) = {
         let config = state.config.lock().unwrap();
-        config.play_sound.then(|| config.sound.clone())
+        let nudge = config.nudges.iter().find(|n| n.id == look).or(config.nudges.first());
+        (
+            nudge.and_then(|n| n.play_sound.then(|| n.sound.clone())),
+            nudge.map_or(0, |n| n.auto_dismiss_secs),
+        )
     };
     if let Some(sound) = sound {
         play_sound(&sound);
@@ -414,21 +542,25 @@ fn show_overlay(app: &AppHandle, counted: bool) {
 
     // auto-dismiss after a configured delay so the reminder can never be missed
     // forever, e.g. when the global key listener lacks permission
-    if let Some(wait) = {
-        let secs = state.config.lock().unwrap().auto_dismiss_secs;
-        (secs > 0).then(|| Duration::from_secs(secs as u64))
-    } {
+    if break_secs > 0 {
+        let wait = Duration::from_secs(break_secs as u64);
         let handle = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(wait);
             let dismiss_handle = handle.clone();
             let _ = handle.run_on_main_thread(move || {
-                let reminder_state = dismiss_handle.state::<App>();
                 // ignore timers left over from an earlier reminder that was
                 // dismissed by hand before this one opened
-                let same_reminder = *reminder_state.overlay_seq.lock().unwrap() == seq;
-                if same_reminder && *reminder_state.showing.lock().unwrap() {
-                    finish_overlay(&dismiss_handle);
+                let same_reminder = dismiss_handle
+                    .state::<App>()
+                    .schedule
+                    .lock()
+                    .unwrap()
+                    .showing
+                    .as_ref()
+                    .is_some_and(|s| s.seq == seq);
+                if same_reminder {
+                    finish_overlay(&dismiss_handle, None);
                 }
             });
         });
@@ -436,52 +568,53 @@ fn show_overlay(app: &AppHandle, counted: bool) {
 
     refresh_tray(app);
     broadcast(app);
+    true
 }
 
-// dismiss the reminder and carry on: restore the schedule a preview interrupted,
-// otherwise start a fresh interval
-fn finish_overlay(app: &AppHandle) {
-    let restore = app.state::<App>().restore_fire.lock().unwrap().take();
-    hide_overlay(app);
-    match restore {
-        Some(fire) => {
-            *app.state::<App>().next_fire.lock().unwrap() = fire;
-            refresh_tray(app);
-            broadcast(app);
+// take the reminder off every screen; the caller decides what its nudges do next
+fn close_windows(app: &AppHandle) -> Option<Showing> {
+    let shown = app.state::<App>().schedule.lock().unwrap().close()?;
+    for label in &shown.windows {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.close();
         }
-        None => enable_reminders(app),
     }
+    // only hide the whole app when no settings window is open that the user
+    // may still be interacting with
+    #[cfg(target_os = "macos")]
+    if app.get_webview_window("settings").is_none() {
+        let _ = app.hide();
+    }
+    Some(shown)
 }
 
-fn hide_overlay(app: &AppHandle) {
-    let state = app.state::<App>();
-    *state.restore_fire.lock().unwrap() = None;
-    if *state.showing.lock().unwrap() {
-        for label in state.overlay_windows.lock().unwrap().drain(..) {
-            if let Some(window) = app.get_webview_window(&label) {
-                let _ = window.close();
-            }
-        }
-        *state.showing.lock().unwrap() = false;
-        // only hide the whole app when no settings window is open that the user
-        // may still be interacting with
-        #[cfg(target_os = "macos")]
-        if app.get_webview_window("settings").is_none() {
-            let _ = app.hide();
-        }
-    }
+// dismiss the reminder and carry on: the nudges it answered start over, a
+// full interval from now or, when snoozed, a few minutes
+fn finish_overlay(app: &AppHandle, snooze_mins: Option<u32>) {
+    let Some(shown) = close_windows(app) else {
+        return;
+    };
+    let snooze = snooze_mins.map(|minutes| Duration::from_secs(minutes.clamp(1, 240) as u64 * 60));
+    let timers: Vec<_> = enabled_timers(&nudges(app))
+        .into_iter()
+        .filter(|(id, _)| shown.due.contains(id))
+        .map(|(id, interval)| (id, snooze.unwrap_or(interval)))
+        .collect();
+    app.state::<App>()
+        .schedule
+        .lock()
+        .unwrap()
+        .resume(&timers, Instant::now());
+    refresh_tray(app);
+    broadcast(app);
 }
 
 #[tauri::command]
 fn close_overlay(app: AppHandle) {
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        // a double click or key repeat can queue this twice; the second one
-        // would find nothing to restore and turn reminders on
-        if *handle.state::<App>().showing.lock().unwrap() {
-            finish_overlay(&handle);
-        }
-    });
+    // a double click or key repeat can queue this twice; the second one finds
+    // nothing on screen and does nothing
+    let _ = app.run_on_main_thread(move || finish_overlay(&handle, None));
 }
 
 fn on_wake(app: &AppHandle) {
@@ -491,18 +624,17 @@ fn on_wake(app: &AppHandle) {
 
 fn on_wake_main(app: &AppHandle) {
     let state = app.state::<App>();
-    let was_showing = *state.showing.lock().unwrap();
-    let config = state.config.lock().unwrap().clone();
+    let (enabled_on_wake, reset_on_wake) = {
+        let config = state.config.lock().unwrap();
+        (config.enabled_on_wake, config.reset_on_wake)
+    };
 
     *state.count_session.lock().unwrap() = 0;
 
-    if was_showing {
-        finish_overlay(app);
-    }
-    if config.enabled_on_wake && state.next_fire.lock().unwrap().is_none() {
-        enable_reminders(app);
-    } else if is_reminders_enabled(app) && config.reset_on_wake {
-        enable_reminders(app);
+    finish_overlay(app, None);
+    let on = is_on(app);
+    if (enabled_on_wake && !on) || (on && reset_on_wake) {
+        set_reminders(app, true);
     }
     refresh_tray(app);
     broadcast(app);
@@ -537,15 +669,16 @@ fn global_key_listener(app: AppHandle) {
         let handle = app.clone();
         let main_handle = handle.clone();
         let _ = handle.run_on_main_thread(move || {
-            let state = main_handle.state::<App>();
-            if !*state.showing.lock().unwrap()
-                || state.shown_at.lock().unwrap().elapsed() < DISMISS_GRACE
-            {
-                return;
-            }
+            let labels = {
+                let state = main_handle.state::<App>();
+                let schedule = state.schedule.lock().unwrap();
+                match schedule.showing.as_ref() {
+                    Some(shown) if shown.shown_at.elapsed() >= DISMISS_GRACE => shown.windows.clone(),
+                    _ => return,
+                }
+            };
             // a focused overlay page gets the key itself (and keeps Enter/Space
             // for its buttons); this listener covers keys typed into other apps
-            let labels = state.overlay_windows.lock().unwrap().clone();
             let overlay_focused = labels.iter().any(|label| {
                 main_handle
                     .get_webview_window(label)
@@ -553,7 +686,7 @@ fn global_key_listener(app: AppHandle) {
                     .unwrap_or(false)
             });
             if !overlay_focused {
-                finish_overlay(&main_handle);
+                finish_overlay(&main_handle, None);
             }
         });
     });
@@ -583,20 +716,42 @@ fn tick_loop(app: AppHandle) {
         // between the due check and the reminder, and a tray refresh started
         // here can't finish after one the click triggered
         let handle = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let state = handle.state::<App>();
-            let due = matches!(*state.next_fire.lock().unwrap(), Some(fire) if fire <= Instant::now());
-            if due {
-                *state.next_fire.lock().unwrap() = None;
-                show_overlay(&handle, true);
-                if !*state.showing.lock().unwrap() {
-                    // no window could open; try again after the next interval
-                    enable_reminders(&handle);
-                }
-            } else {
-                refresh_tray(&handle);
-            }
-        });
+        let _ = app.run_on_main_thread(move || tick(&handle));
+    }
+}
+
+fn tick(app: &AppHandle) {
+    let now = Instant::now();
+    let (joined, due) = {
+        let state = app.state::<App>();
+        let mut schedule = state.schedule.lock().unwrap();
+        if schedule.showing.is_some() {
+            let joined = schedule.due_now(now, Duration::ZERO, false);
+            schedule.join(&joined);
+            (joined, Vec::new())
+        } else {
+            (Vec::new(), schedule.due_now(now, JOIN_WINDOW, false))
+        }
+    };
+    if !joined.is_empty() {
+        // the reminder on screen gains a line for each, without a second
+        // sound or count
+        let _ = app.emit("nudge://overlay", overlay_state(app));
+        refresh_tray(app);
+        broadcast(app);
+    } else if let Some(&look) = due.first() {
+        if !show_overlay(app, look, due.clone(), true) {
+            // no window could open; try again after the next interval
+            let timers: Vec<_> = enabled_timers(&nudges(app))
+                .into_iter()
+                .filter(|(id, _)| due.contains(id))
+                .collect();
+            app.state::<App>().schedule.lock().unwrap().resume(&timers, now);
+            refresh_tray(app);
+            broadcast(app);
+        }
+    } else {
+        refresh_tray(app);
     }
 }
 
@@ -645,12 +800,34 @@ fn play_sound(name: &str) {
     }
 }
 
-// hide any reminder and schedule the next one `minutes` from now
-fn remind_in(app: &AppHandle, minutes: u32) {
-    let mins = minutes.clamp(1, 240);
-    hide_overlay(app);
+
+// Take a Break Now: the next nudge due, early. with reminders off (or every
+// nudge off) it shows the first nudge and starts nothing when dismissed
+fn take_break_now(app: &AppHandle) {
     let state = app.state::<App>();
-    *state.next_fire.lock().unwrap() = Some(Instant::now() + Duration::from_secs(mins as u64 * 60));
+    let first = state.config.lock().unwrap().nudges.first().map_or(1, |n| n.id);
+    let due = {
+        let schedule = state.schedule.lock().unwrap();
+        if schedule.showing.is_some() {
+            return;
+        }
+        schedule.due_now(Instant::now(), JOIN_WINDOW, true)
+    };
+    let look = due.first().copied().unwrap_or(first);
+    if show_overlay(app, look, due, true) {
+        state.schedule.lock().unwrap().end_pause();
+    }
+}
+
+// hide any reminder and hold every nudge back at least `minutes`
+fn pause_reminders(app: &AppHandle, minutes: u32) {
+    if !is_on(app) {
+        return;
+    }
+    close_windows(app);
+    let ids: Vec<u32> = enabled_timers(&nudges(app)).into_iter().map(|(id, _)| id).collect();
+    let until = Instant::now() + Duration::from_secs(minutes.clamp(1, 240) as u64 * 60);
+    app.state::<App>().schedule.lock().unwrap().pause(&ids, until);
     refresh_tray(app);
     broadcast(app);
 }
@@ -658,37 +835,24 @@ fn remind_in(app: &AppHandle, minutes: u32) {
 #[tauri::command]
 fn snooze(app: AppHandle, minutes: u32) {
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if !*handle.state::<App>().showing.lock().unwrap() {
-            return;
-        }
-        let previewing = handle.state::<App>().restore_fire.lock().unwrap().is_some();
-        if previewing {
-            finish_overlay(&handle);
-        } else {
-            remind_in(&handle, minutes);
-        }
-    });
+    let _ = app.run_on_main_thread(move || finish_overlay(&handle, Some(minutes)));
 }
 
 // async: a sync command runs inside the IPC callback on the main thread, where
 // building the overlay windows deadlocks on Windows
 #[tauri::command]
-async fn preview_reminder(app: AppHandle) {
+async fn preview_reminder(app: AppHandle, id: u32) {
     let handle = app.clone();
+    // a preview answers no nudge: timers keep running and dismissing it
+    // restarts nothing
     let _ = app.run_on_main_thread(move || {
-        let state = handle.state::<App>();
-        if *state.showing.lock().unwrap() {
-            return;
-        }
-        let current = *state.next_fire.lock().unwrap();
-        show_overlay(&handle, false);
-        if *state.showing.lock().unwrap() {
-            *state.restore_fire.lock().unwrap() = Some(current);
-            refresh_tray(&handle);
-            broadcast(&handle);
-        }
+        show_overlay(&handle, id, Vec::new(), false);
     });
+}
+
+#[tauri::command]
+fn get_overlay(app: AppHandle) -> OverlayState {
+    overlay_state(&app)
 }
 
 #[tauri::command]
@@ -732,80 +896,26 @@ fn get_state(app: AppHandle) -> PublicState {
     snapshot(&app)
 }
 
+// the options every nudge shares
 #[tauri::command]
 fn set_config(
     app: AppHandle,
-    interval_secs: Option<u32>,
-    message: Option<String>,
     enabled_on_wake: Option<bool>,
     reset_on_wake: Option<bool>,
-    play_sound: Option<bool>,
     launch_at_login: Option<bool>,
-    auto_dismiss_secs: Option<u32>,
-    break_ideas: Option<bool>,
-    style: Option<String>,
-    text_size: Option<String>,
-    show_counts: Option<bool>,
-    sound: Option<String>,
-    snooze_mins: Option<u32>,
     menu_bar_timer: Option<String>,
-    layout: Option<String>,
 ) {
     let state = app.state::<App>();
-    if interval_secs.unwrap_or(0) > 0 {
-        let interval = interval_secs.unwrap().max(5 * 60);
-        let mut config = state.config.lock().unwrap();
-        config.interval_secs = interval;
-        if is_reminders_enabled(&app) {
-            let fire = Some(Instant::now() + Duration::from_secs(interval as u64));
-            let mut restore = state.restore_fire.lock().unwrap();
-            if restore.is_some() {
-                *restore = Some(fire);
-            } else {
-                *state.next_fire.lock().unwrap() = fire;
-            }
-        }
-    }
-    if let Some(message) = message {
-        state.config.lock().unwrap().message = message;
-    }
-    if let Some(value) = enabled_on_wake {
-        state.config.lock().unwrap().enabled_on_wake = value;
-    }
-    if let Some(value) = reset_on_wake {
-        state.config.lock().unwrap().reset_on_wake = value;
-    }
-    if let Some(value) = play_sound {
-        state.config.lock().unwrap().play_sound = value;
-    }
-    if let Some(value) = auto_dismiss_secs {
-        state.config.lock().unwrap().auto_dismiss_secs = value.min(600);
-    }
     {
         let mut config = state.config.lock().unwrap();
-        if let Some(value) = break_ideas {
-            config.break_ideas = value;
+        if let Some(value) = enabled_on_wake {
+            config.enabled_on_wake = value;
         }
-        if let Some(value) = show_counts {
-            config.show_counts = value;
-        }
-        if let Some(value) = style.filter(|v| STYLES.contains(&v.as_str())) {
-            config.style = value;
-        }
-        if let Some(value) = text_size.filter(|v| TEXT_SIZES.contains(&v.as_str())) {
-            config.text_size = value;
-        }
-        if let Some(value) = sound.filter(|v| SOUNDS.contains(&v.as_str())) {
-            config.sound = value;
-        }
-        if let Some(value) = snooze_mins {
-            config.snooze_mins = value.min(30);
+        if let Some(value) = reset_on_wake {
+            config.reset_on_wake = value;
         }
         if let Some(value) = menu_bar_timer.filter(|v| MENU_BAR_TIMERS.contains(&v.as_str())) {
             config.menu_bar_timer = value;
-        }
-        if let Some(value) = layout.filter(|v| LAYOUTS.contains(&v.as_str())) {
-            config.layout = value;
         }
     }
     if let Some(enable) = launch_at_login {
@@ -827,9 +937,159 @@ fn set_config(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn set_nudge(
+    app: AppHandle,
+    id: u32,
+    enabled: Option<bool>,
+    message: Option<String>,
+    symbol: Option<String>,
+    interval_secs: Option<u32>,
+    play_sound: Option<bool>,
+    auto_dismiss_secs: Option<u32>,
+    break_ideas: Option<bool>,
+    style: Option<String>,
+    text_size: Option<String>,
+    show_counts: Option<bool>,
+    sound: Option<String>,
+    snooze_mins: Option<u32>,
+    layout: Option<String>,
+) {
+    let state = app.state::<App>();
+    // what the schedule has to hear, applied once the config lock is released
+    let (start, stop) = {
+        let mut config = state.config.lock().unwrap();
+        let only = config.nudges.len() == 1;
+        let Some(nudge) = config.nudges.iter_mut().find(|n| n.id == id) else {
+            return;
+        };
+        let mut start = false;
+        let mut stop = false;
+        if let Some(secs) = interval_secs.filter(|&secs| secs > 0) {
+            nudge.interval_secs = secs.max(5 * 60);
+            // a new interval restarts the timer
+            start = true;
+        }
+        // a lone nudge can't be turned off by itself; the master switch covers it
+        if let Some(value) = enabled.filter(|&value| value || !only) {
+            if value != nudge.enabled {
+                nudge.enabled = value;
+                start |= value;
+                stop = !value;
+            }
+        }
+        if let Some(value) = message {
+            nudge.message = value;
+        }
+        if let Some(value) = symbol.filter(|v| SYMBOLS.contains(&v.as_str())) {
+            nudge.symbol = value;
+        }
+        if let Some(value) = play_sound {
+            nudge.play_sound = value;
+        }
+        if let Some(value) = auto_dismiss_secs {
+            nudge.auto_dismiss_secs = value.min(600);
+        }
+        if let Some(value) = break_ideas {
+            nudge.break_ideas = value;
+        }
+        if let Some(value) = show_counts {
+            nudge.show_counts = value;
+        }
+        if let Some(value) = style.filter(|v| STYLES.contains(&v.as_str())) {
+            nudge.style = value;
+        }
+        if let Some(value) = text_size.filter(|v| TEXT_SIZES.contains(&v.as_str())) {
+            nudge.text_size = value;
+        }
+        if let Some(value) = sound.filter(|v| SOUNDS.contains(&v.as_str())) {
+            nudge.sound = value;
+        }
+        if let Some(value) = snooze_mins {
+            nudge.snooze_mins = value.min(30);
+        }
+        if let Some(value) = layout.filter(|v| LAYOUTS.contains(&v.as_str())) {
+            nudge.layout = value;
+        }
+        let timer = (nudge.id, Duration::from_secs(nudge.interval_secs as u64));
+        ((start && nudge.enabled).then_some(timer), stop)
+    };
+    {
+        let mut schedule = state.schedule.lock().unwrap();
+        if let Some(timer) = start {
+            schedule.resume(&[timer], Instant::now());
+        }
+        if stop {
+            schedule.next.remove(&id);
+        }
+    }
+    save_config(&app);
+    refresh_tray(&app);
+    broadcast(&app);
+}
+
+// a new nudge with the usual defaults, its timer running; None at the limit
+#[tauri::command]
+fn add_nudge(app: AppHandle) -> Option<u32> {
+    let state = app.state::<App>();
+    let nudge = {
+        let mut config = state.config.lock().unwrap();
+        if config.nudges.len() >= MAX_NUDGES {
+            return None;
+        }
+        let id = config.nudges.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+        let nudge = Nudge {
+            id,
+            message: "New nudge".into(),
+            symbol: "bell".into(),
+            ..Nudge::default()
+        };
+        config.nudges.push(nudge.clone());
+        nudge
+    };
+    save_config(&app);
+    let timer = (nudge.id, Duration::from_secs(nudge.interval_secs as u64));
+    state.schedule.lock().unwrap().resume(&[timer], Instant::now());
+    refresh_tray(&app);
+    broadcast(&app);
+    Some(nudge.id)
+}
+
+// there is always at least one nudge, so the last can't be deleted
+#[tauri::command]
+fn delete_nudge(app: AppHandle, id: u32) {
+    let state = app.state::<App>();
+    let survivor = {
+        let mut config = state.config.lock().unwrap();
+        if config.nudges.len() <= 1 || !config.nudges.iter().any(|n| n.id == id) {
+            return;
+        }
+        config.nudges.retain(|n| n.id != id);
+        // a lone nudge has no switch of its own, so it can't be left off
+        match config.nudges.as_mut_slice() {
+            [only] if !only.enabled => {
+                only.enabled = true;
+                Some((only.id, Duration::from_secs(only.interval_secs as u64)))
+            }
+            _ => None,
+        }
+    };
+    save_config(&app);
+    {
+        let mut schedule = state.schedule.lock().unwrap();
+        schedule.forget(id);
+        if let Some(timer) = survivor {
+            schedule.resume(&[timer], Instant::now());
+        }
+    }
+    refresh_tray(&app);
+    broadcast(&app);
+}
+
+#[tauri::command]
 fn set_enabled(app: AppHandle, enabled: bool) {
-    if enabled != is_reminders_enabled(&app) {
-        toggle_reminders(&app);
+    if enabled != is_on(&app) {
+        set_reminders(&app, enabled);
     }
 }
 
@@ -938,22 +1198,22 @@ fn main() {
         ))
         .manage(App {
             config: Mutex::new(Config::default()),
-            next_fire: Mutex::new(None),
-            showing: Mutex::new(false),
+            schedule: Mutex::new(Schedule::new()),
             count_session: Mutex::new(0),
-            overlay_seq: Mutex::new(0),
-            overlay_windows: Mutex::new(Vec::new()),
-            countdown_item: Mutex::new(None),
+            menu: Mutex::new(None),
+            countdown_items: Mutex::new(Vec::new()),
             toggle_item: Mutex::new(None),
             tray: Mutex::new(None),
             pause_menu: Mutex::new(None),
             last_label: Mutex::new(String::new()),
-            restore_fire: Mutex::new(None),
-            shown_at: Mutex::new(Instant::now()),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
             set_config,
+            set_nudge,
+            add_nudge,
+            delete_nudge,
+            get_overlay,
             close_overlay,
             snooze,
             set_enabled,
@@ -968,18 +1228,19 @@ fn main() {
             // that "any key to dismiss" keeps working without fighting the other overlays
             if matches!(event, tauri::WindowEvent::Focused(false))
                 && window.label().starts_with("overlay-")
-                && *window.app_handle().state::<App>().showing.lock().unwrap()
+                && window.app_handle().state::<App>().schedule.lock().unwrap().showing.is_some()
             {
                 let handle = window.app_handle().clone();
                 let focus_handle = handle.clone();
                 let _ = handle.run_on_main_thread(move || {
                     let primary = focus_handle
                         .state::<App>()
-                        .overlay_windows
+                        .schedule
                         .lock()
                         .unwrap()
-                        .first()
-                        .cloned()
+                        .showing
+                        .as_ref()
+                        .and_then(|shown| shown.windows.first().cloned())
                         .unwrap_or_default();
                     if let Some(w) = focus_handle.get_webview_window(&primary) {
                         let _ = w.set_focus();
@@ -1071,24 +1332,10 @@ fn main() {
                 .tooltip("Nudge")
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "toggle" => toggle_reminders(app),
-                    "break-now" => {
-                        let state = app.state::<App>();
-                        if !*state.showing.lock().unwrap() {
-                            let was_enabled = is_reminders_enabled(app);
-                            let previous = state.next_fire.lock().unwrap().take();
-                            show_overlay(app, true);
-                            if !*state.showing.lock().unwrap() {
-                                *state.next_fire.lock().unwrap() = previous;
-                            } else if !was_enabled {
-                                *state.restore_fire.lock().unwrap() = Some(None);
-                                refresh_tray(app);
-                                broadcast(app);
-                            }
-                        }
-                    }
-                    "pause-30" | "pause-60" | "pause-120" if is_reminders_enabled(app) => {
+                    "break-now" => take_break_now(app),
+                    "pause-30" | "pause-60" | "pause-120" => {
                         let minutes = event.id().as_ref()[6..].parse().unwrap_or(60);
-                        remind_in(app, minutes);
+                        pause_reminders(app, minutes);
                     }
                     "settings" => open_settings(app.clone()),
                     #[cfg(target_os = "macos")]
@@ -1098,12 +1345,13 @@ fn main() {
                 })
                 .build(&handle)?;
 
-            *app.state::<App>().countdown_item.lock().unwrap() = Some(countdown);
+            *app.state::<App>().menu.lock().unwrap() = Some(menu);
+            *app.state::<App>().countdown_items.lock().unwrap() = vec![countdown];
             *app.state::<App>().toggle_item.lock().unwrap() = Some(toggle);
             *app.state::<App>().tray.lock().unwrap() = Some(tray);
             *app.state::<App>().pause_menu.lock().unwrap() = Some(pause);
             refresh_tray(app.app_handle());
-            enable_reminders(app.app_handle());
+            set_reminders(app.app_handle(), true);
 
             {
                 let handle = handle.clone();
@@ -1131,46 +1379,191 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{hms, Config, PublicState};
+    use super::{
+        config_json, hms, parse_config, AlsoNow, Config, Nudge, NudgeState, OverlayState,
+        PublicState,
+    };
+    use serde::Deserialize;
 
     #[test]
     fn config_from_0_1_0_loads_with_new_defaults() {
         // a config.json written by 0.1.0, before any customization options existed
         let old = r#"{"interval_secs":2700,"message":"stretch","enabled_on_wake":false,
             "reset_on_wake":true,"play_sound":false,"launch_at_login":true,"count_total":52}"#;
-        let config: Config = serde_json::from_str(old).expect("old config must still load");
-        assert_eq!(config.interval_secs, 2700);
-        assert_eq!(config.message, "stretch");
+        let config = parse_config(old).expect("old config must still load");
         assert_eq!(config.count_total, 52);
-        assert!(!config.play_sound);
-        assert_eq!(config.auto_dismiss_secs, 0);
-        assert!(config.break_ideas);
-        assert_eq!(config.style, "frosted");
-        assert_eq!(config.text_size, "standard");
-        assert!(config.show_counts);
-        assert_eq!(config.sound, "chime");
-        assert_eq!(config.snooze_mins, 5);
+        assert!(!config.enabled_on_wake);
+        assert!(config.launch_at_login);
         assert_eq!(config.menu_bar_timer, "never");
-        assert_eq!(config.layout, "classic");
+        assert_eq!(config.nudges.len(), 1);
+        let nudge = &config.nudges[0];
+        assert_eq!(nudge.id, 1);
+        assert!(nudge.enabled);
+        assert_eq!(nudge.interval_secs, 2700);
+        assert_eq!(nudge.message, "stretch");
+        assert!(!nudge.play_sound);
+        assert_eq!(nudge.auto_dismiss_secs, 0);
+        assert!(nudge.break_ideas);
+        assert_eq!(nudge.style, "frosted");
+        assert_eq!(nudge.text_size, "standard");
+        assert!(nudge.show_counts);
+        assert_eq!(nudge.sound, "chime");
+        assert_eq!(nudge.snooze_mins, 5);
+        assert_eq!(nudge.layout, "classic");
+        assert_eq!(nudge.symbol, "figure");
     }
 
     #[test]
-    fn public_state_keeps_flat_field_names_for_the_pages() {
+    fn config_from_0_2_0_becomes_the_first_nudge() {
+        let old = r#"{"interval_secs":5400,"message":"Time to step away","enabled_on_wake":true,
+            "reset_on_wake":true,"play_sound":false,"launch_at_login":true,"count_total":63,
+            "auto_dismiss_secs":0,"break_ideas":true,"style":"frosted","text_size":"standard",
+            "show_counts":true,"sound":"chime","snooze_mins":5,"menu_bar_timer":"always",
+            "layout":"card"}"#;
+        let config = parse_config(old).expect("0.2.0 config must load");
+        assert_eq!(config.count_total, 63);
+        assert!(config.launch_at_login);
+        assert_eq!(config.menu_bar_timer, "always");
+        let expected = Nudge {
+            interval_secs: 5400,
+            play_sound: false,
+            layout: "card".into(),
+            ..Nudge::default()
+        };
+        assert_eq!(config.nudges, vec![expected]);
+    }
+
+    #[test]
+    fn saved_config_loads_back_unchanged() {
+        let mut config = Config::default();
+        config.count_total = 9;
+        config.menu_bar_timer = "last5".into();
+        config.nudges.push(Nudge {
+            id: 4,
+            enabled: false,
+            message: "Drink some water".into(),
+            symbol: "drop".into(),
+            interval_secs: 1200,
+            style: "ocean".into(),
+            ..Nudge::default()
+        });
+        let text = serde_json::to_string_pretty(&config_json(&config)).unwrap();
+        assert_eq!(parse_config(&text), Some(config));
+    }
+
+    #[test]
+    fn a_lone_nudge_is_always_on() {
+        let text = r#"{"enabled_on_wake":true,"reset_on_wake":true,"launch_at_login":false,
+            "count_total":0,"nudges":[{"id":3,"enabled":false,"message":"water"}]}"#;
+        let config = parse_config(text).unwrap();
+        assert_eq!(config.nudges.len(), 1);
+        assert_eq!(config.nudges[0].id, 3);
+        assert!(config.nudges[0].enabled);
+    }
+
+    // the Config struct as 0.2.0 declared it, to check that going back to that
+    // build still reads the file this one writes
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct Config020 {
+        interval_secs: u32,
+        message: String,
+        enabled_on_wake: bool,
+        reset_on_wake: bool,
+        play_sound: bool,
+        launch_at_login: bool,
+        count_total: u32,
+        #[serde(default)]
+        auto_dismiss_secs: u32,
+        break_ideas: bool,
+        style: String,
+        text_size: String,
+        show_counts: bool,
+        sound: String,
+        snooze_mins: u32,
+        menu_bar_timer: String,
+        layout: String,
+    }
+
+    #[test]
+    fn older_builds_still_read_the_first_nudge() {
+        let mut config = Config::default();
+        config.count_total = 63;
+        config.nudges[0] = Nudge {
+            message: "stretch".into(),
+            interval_secs: 2700,
+            style: "dusk".into(),
+            layout: "ring".into(),
+            play_sound: false,
+            ..Nudge::default()
+        };
+        config.nudges.push(Nudge {
+            id: 2,
+            message: "water".into(),
+            ..Nudge::default()
+        });
+        let old: Config020 =
+            serde_json::from_value(config_json(&config)).expect("0.2.0 must read the new file");
+        assert_eq!(old.message, "stretch");
+        assert_eq!(old.interval_secs, 2700);
+        assert_eq!(old.style, "dusk");
+        assert_eq!(old.layout, "ring");
+        assert!(!old.play_sound);
+        assert_eq!(old.count_total, 63);
+    }
+
+    #[test]
+    fn public_state_lists_each_nudge_with_its_countdown() {
         let state = PublicState {
-            config: Config::default(),
+            enabled_on_wake: true,
+            reset_on_wake: true,
+            launch_at_login: false,
+            menu_bar_timer: "never".into(),
+            count_total: 5,
             count_session: 3,
             enabled: true,
             showing: false,
-            remaining_secs: 42,
+            nudges: vec![NudgeState {
+                nudge: Nudge::default(),
+                remaining_secs: 42,
+            }],
         };
         let json = serde_json::to_value(state).unwrap();
         for key in [
-            "interval_secs", "message", "play_sound", "auto_dismiss_secs", "style",
-            "snooze_mins", "menu_bar_timer", "layout", "count_session", "enabled", "remaining_secs",
+            "enabled_on_wake", "reset_on_wake", "launch_at_login", "menu_bar_timer",
+            "count_total", "count_session", "enabled", "showing",
         ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }
-        assert_eq!(json["remaining_secs"], 42);
+        let nudge = &json["nudges"][0];
+        for key in [
+            "id", "enabled", "message", "symbol", "interval_secs", "play_sound",
+            "auto_dismiss_secs", "style", "snooze_mins", "layout", "remaining_secs",
+        ] {
+            assert!(nudge.get(key).is_some(), "missing nudge {key}");
+        }
+        assert_eq!(nudge["remaining_secs"], 42);
+    }
+
+    #[test]
+    fn overlay_state_is_flat_for_the_reminder_page() {
+        let state = OverlayState {
+            look: Nudge::default(),
+            also: vec![AlsoNow {
+                message: "Drink some water".into(),
+                symbol: "drop".into(),
+            }],
+            count_total: 7,
+            count_session: 2,
+        };
+        let json = serde_json::to_value(state).unwrap();
+        for key in [
+            "message", "symbol", "style", "layout", "text_size", "break_ideas", "snooze_mins",
+            "auto_dismiss_secs", "show_counts", "count_total", "count_session",
+        ] {
+            assert!(json.get(key).is_some(), "missing {key}");
+        }
+        assert_eq!(json["also"][0]["symbol"], "drop");
     }
 
     #[test]
