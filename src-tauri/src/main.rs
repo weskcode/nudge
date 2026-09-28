@@ -178,6 +178,17 @@ fn parse_config(text: &str) -> Option<Config> {
         first.id = 1;
         config.nudges.push(first);
     }
+    // settings and delete pick a nudge by id, so a repeated id (or a missing
+    // one, which reads as 1) in a hand-edited file would change or delete
+    // several at once; later repeats get fresh ids
+    let mut seen = std::collections::HashSet::new();
+    let mut last_id = config.nudges.iter().map(|n| n.id).max().unwrap_or(0);
+    for nudge in &mut config.nudges {
+        if !seen.insert(nudge.id) {
+            last_id += 1;
+            nudge.id = last_id;
+        }
+    }
     // a lone nudge has no switch of its own; the master switch covers it
     if let [only] = config.nudges.as_mut_slice() {
         only.enabled = true;
@@ -1447,6 +1458,17 @@ mod tests {
         assert_eq!(config.nudges.len(), 1);
         assert_eq!(config.nudges[0].id, 3);
         assert!(config.nudges[0].enabled);
+    }
+
+    #[test]
+    fn repeated_or_missing_ids_become_unique() {
+        let text = r#"{"enabled_on_wake":true,"reset_on_wake":true,"launch_at_login":false,
+            "count_total":0,"nudges":[{"id":2,"message":"a"},{"id":2,"message":"b"},
+            {"message":"c"},{"message":"d"}]}"#;
+        let config = parse_config(text).unwrap();
+        let loaded: Vec<(u32, &str)> =
+            config.nudges.iter().map(|n| (n.id, n.message.as_str())).collect();
+        assert_eq!(loaded, vec![(2, "a"), (3, "b"), (1, "c"), (4, "d")]);
     }
 
     // the Config struct as 0.2.0 declared it, to check that going back to that
