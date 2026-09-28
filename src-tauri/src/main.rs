@@ -1530,6 +1530,14 @@ mod tests {
         assert!(replace_file(&path, "lost").is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
 
+        // a directory in the file's place makes the rename fail after the
+        // write, and the temp file that was written is removed
+        let blocked = dir.join("blocked.json");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("inside"), "").unwrap();
+        assert!(replace_file(&blocked, "lost").is_err());
+        assert!(!dir.join("blocked.json.tmp").exists());
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
