@@ -1,6 +1,8 @@
 // no console window behind the tray app on Windows release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod key_tap;
 mod schedule;
 
 use schedule::{hms, Schedule, Showing};
@@ -155,6 +157,7 @@ struct App {
 
 // keys typed in the moment a reminder opens were meant for another app;
 // letting them dismiss it would close the reminder before anyone sees it
+#[cfg(target_os = "macos")]
 const DISMISS_GRACE: Duration = Duration::from_millis(1500);
 
 fn config_path() -> PathBuf {
@@ -642,35 +645,20 @@ fn on_wake_main(app: &AppHandle) {
 
 // global key listener: dismiss the reminder on any key press, even when some
 // other app is frontmost (the overlay webview never gets those key events).
-// needs Accessibility/Input Monitoring permission; see listen result comment
+// needs Input Monitoring permission; without it the reminder still closes on
+// a click or a key typed into it
+#[cfg(target_os = "macos")]
 fn global_key_listener(app: AppHandle) {
-    use rdev::{EventType, Key};
-    let result = rdev::listen(move |event| {
-        let EventType::KeyPress(key) = event.event_type else {
-            return;
-        };
-        // Tab and modifiers move focus or start shortcuts; they don't dismiss
-        if matches!(
-            key,
-            Key::Tab
-                | Key::ShiftLeft
-                | Key::ShiftRight
-                | Key::ControlLeft
-                | Key::ControlRight
-                | Key::Alt
-                | Key::AltGr
-                | Key::MetaLeft
-                | Key::MetaRight
-                | Key::CapsLock
-                | Key::Function
-        ) {
+    // modifiers never arrive as key presses; Tab moves focus between the
+    // reminder's buttons (and is half of Cmd-Tab), so it doesn't dismiss
+    let result = key_tap::listen(move |keycode| {
+        if keycode == key_tap::TAB {
             return;
         }
         let handle = app.clone();
-        let main_handle = handle.clone();
-        let _ = handle.run_on_main_thread(move || {
+        let _ = app.run_on_main_thread(move || {
             let labels = {
-                let state = main_handle.state::<App>();
+                let state = handle.state::<App>();
                 let schedule = state.schedule.lock().unwrap();
                 match schedule.showing.as_ref() {
                     Some(shown) if shown.shown_at.elapsed() >= DISMISS_GRACE => shown.windows.clone(),
@@ -680,18 +668,18 @@ fn global_key_listener(app: AppHandle) {
             // a focused overlay page gets the key itself (and keeps Enter/Space
             // for its buttons); this listener covers keys typed into other apps
             let overlay_focused = labels.iter().any(|label| {
-                main_handle
+                handle
                     .get_webview_window(label)
                     .and_then(|window| window.is_focused().ok())
                     .unwrap_or(false)
             });
             if !overlay_focused {
-                finish_overlay(&main_handle, None);
+                finish_overlay(&handle, None);
             }
         });
     });
     if let Err(error) = result {
-        println!("global key listener unavailable: {error:?}");
+        println!("global key listener unavailable: {error}");
     }
 }
 
