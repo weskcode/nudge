@@ -2,8 +2,8 @@
 
 ## 2026-09-27, multiple nudges
 
-Captured from a debug build of the working tree (after `b9117d1`, not yet
-committed) on macOS 27, light appearance, Retina (2x), with
+Captured from a debug build of the working tree (after `e341c43`, before
+this change was committed) on macOS 27, light appearance, Retina (2x), with
 `screencapture -l <window id>`. The build ran with `HOME` pointed at a temp
 folder and three nudges in its config.json, so the installed app and its
 settings were left alone. Pages were switched with AX press actions.
@@ -28,10 +28,10 @@ Captured from the signed release build on macOS 27, Retina (2x), with
 - `settings-2026-09-27.png`: the redesigned Settings window (780x580
   logical), a System Settings–style sidebar over the native window material,
   showing the Reminder page with its live preview, style swatches and the
-  Classic / Card / Ring layout picker (0.2.0, `b9117d1`, light appearance,
+  Classic / Card / Ring layout picker (0.2.0, `e341c43`, light appearance,
   Card selected).
 - `about-2026-09-27.png`: the About panel opened from the menu bar menu
-  (working tree after `59099a6`, dark appearance).
+  (working tree after `3b933ab`, dark appearance).
 
 The overlay was not recaptured: showing it takes over every screen, and the
 button styling change is small. `overlay-current.png` still shows the layout.
