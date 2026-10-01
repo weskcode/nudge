@@ -407,24 +407,42 @@ $("nudge-select").addEventListener("change", async (e) => {
 
 $("nudge-enabled").addEventListener("change", (e) => saveNudge({ enabled: e.target.checked }));
 
+// arrowing through the choices saves only where it stops, since each save
+// restarts the timer; only a click on Custom moves focus into its field
+let intervalClicked = false;
+let intervalSave = 0;
+$("interval").addEventListener("pointerdown", () => (intervalClicked = true));
 document.querySelectorAll('input[name="interval"]').forEach((input) => {
   input.addEventListener("change", () => {
+    const clicked = intervalClicked;
+    intervalClicked = false;
+    clearTimeout(intervalSave);
     if (input.value === "custom") {
       customMode = true;
       $("custom-row").classList.remove("collapsed");
       $("custom-row").inert = false;
-      $("custom-minutes").focus();
-      $("custom-minutes").select();
+      if (clicked) {
+        $("custom-minutes").focus();
+        $("custom-minutes").select();
+      }
       return;
     }
     customMode = false;
-    saveNudge({ intervalSecs: Number(input.value) * 60 });
+    const secs = Number(input.value) * 60;
+    intervalSave = setTimeout(() => saveNudge({ intervalSecs: secs }), clicked ? 0 : 600);
   });
 });
 
+// the field always ends up showing the interval that was saved
 $("custom-minutes").addEventListener("change", () => {
-  const minutes = Math.round(Number($("custom-minutes").value));
-  if (minutes > 0) saveNudge({ intervalSecs: Math.min(480, Math.max(5, minutes)) * 60 });
+  const typed = Math.round(Number($("custom-minutes").value));
+  if (!(typed > 0)) {
+    $("custom-minutes").value = Math.round(current().interval_secs / 60);
+    return;
+  }
+  const minutes = Math.min(480, Math.max(5, typed));
+  $("custom-minutes").value = minutes;
+  saveNudge({ intervalSecs: minutes * 60 });
 });
 
 $("message").addEventListener("input", () => state && renderPreview(current(), $("message").value.trim()));
