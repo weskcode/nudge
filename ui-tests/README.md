@@ -7,13 +7,13 @@ Captured on macOS 27, dark appearance, Retina (2x), with
 
 - `settings-reminder-2026-09-30.png` and `settings-schedule-2026-09-30.png`:
   the Settings window with the linocut bell in the sidebar. A debug build of
-  `bdff69f` ran with `HOME` pointed at a temp folder holding three sample
+  `9edd7bf` ran with `HOME` pointed at a temp folder holding three sample
   nudges, so the installed app and its settings were left alone. Pages were
   switched with AX press actions.
 - `tray-2026-09-30.png`: the menu bar menu from the same build, one countdown
   line per nudge.
 - `about-2026-09-30.png`: the About panel of the installed, notarized 1.0.1
-  (`89b5bb8`). The unbundled debug build has no app icon, so its About panel
+  (`3a65cf1`). The unbundled debug build has no app icon, so its About panel
   shows a folder. macOS draws the gray plate around the icon.
 - `overlay-2026-09-30.png`: the reminder as it appears when a nudge goes
   off, from the same debug build: Card layout, Ocean style, a break idea and
@@ -28,7 +28,7 @@ Captured on macOS 27, dark appearance, Retina (2x), with
 
 ## 2026-09-27, multiple nudges
 
-Captured from a debug build of the working tree (after `e341c43`, before
+Captured from a debug build of the working tree (after `3dc3436`, before
 this change was committed) on macOS 27, light appearance, Retina (2x), with
 `screencapture -l <window id>`. The build ran with `HOME` pointed at a temp
 folder and three nudges in its config.json, so the installed app and its
@@ -55,23 +55,19 @@ Captured from the signed release build on macOS 27, Retina (2x), with
   logical), a sidebar styled like System Settings over the native window
   material,
   showing the Reminder page with its live preview, style swatches and the
-  Classic / Card / Ring layout picker (0.2.0, `e341c43`, light appearance,
+  Classic / Card / Ring layout picker (0.2.0, `3dc3436`, light appearance,
   Card selected).
 - `about-2026-09-27.png`: the About panel opened from the menu bar menu
-  (working tree after `3b933ab`, dark appearance).
+  (working tree after `671e0e6`, dark appearance).
 
-The overlay was not recaptured: showing it takes over every screen, and the
-button styling change is small. `overlay-current.png` still shows the layout.
+The overlay was not recaptured: showing it takes over every screen.
 
 ## 2026-09-12
 
-Date captured: 2026-09-12, bundled release build from commit working-tree
-at that time (auto-dismiss + interval floor + settings-persistence batch,
-`bdd12dd` and later). Commit new screenshots next to these whenever the
+Date captured: 2026-09-12, bundled release build of the working tree at
+that time (auto-dismiss + interval floor + settings-persistence batch). Commit new screenshots next to these whenever the
 UI intentionally changes, named `<surface>-<YYYY-MM-DD>.png`.
 
-- `overlay-current.png`: the fullscreen reminder over a real desktop
-  (Retina capture, 2x), message + snooze pill + dismiss hint + counters.
 - `settings-current.png`: replica of the Settings window at its true
   440x500 logical content size (same HTML/CSS/JS as `index.html`; the
   real window differs only by native window chrome (title bar), which
