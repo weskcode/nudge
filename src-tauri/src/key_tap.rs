@@ -19,6 +19,8 @@ const HEAD_INSERT_EVENT_TAP: u32 = 0;
 const LISTEN_ONLY: u32 = 1;
 const KEY_DOWN: u32 = 10;
 const KEYBOARD_EVENT_KEYCODE: u32 = 9;
+// kCGEventFlagMaskControl, kCGEventFlagMaskAlternate, kCGEventFlagMaskCommand
+const SHORTCUT_FLAGS: u64 = 0x0004_0000 | 0x0008_0000 | 0x0010_0000;
 // sent in place of an event when macOS has switched the tap off
 const TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
 const TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
@@ -35,6 +37,12 @@ extern "C" {
     ) -> Ref;
     fn CGEventTapEnable(tap: Ref, enable: bool);
     fn CGEventGetIntegerValueField(event: Ref, field: u32) -> i64;
+    fn CGEventGetFlags(event: Ref) -> u64;
+}
+
+// a key held with Control, Option or Command is a shortcut, VoiceOver's among them
+fn is_shortcut(flags: u64) -> bool {
+    flags & SHORTCUT_FLAGS != 0
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -48,7 +56,7 @@ extern "C" {
 
 struct Listener {
     tap: AtomicPtr<c_void>,
-    on_key: Box<dyn Fn(i64)>,
+    on_key: Box<dyn Fn(i64, bool)>,
 }
 
 extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, info: *mut c_void) -> Ref {
@@ -56,9 +64,10 @@ extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, info: *mut c_void) ->
     match kind {
         KEY_DOWN => {
             let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+            let shortcut = is_shortcut(unsafe { CGEventGetFlags(event) });
             // a panic must not unwind into CoreGraphics; the panic hook has
             // already printed it by the time it's caught here
-            let _ = catch_unwind(AssertUnwindSafe(|| (listener.on_key)(keycode)));
+            let _ = catch_unwind(AssertUnwindSafe(|| (listener.on_key)(keycode, shortcut)));
         }
         TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => unsafe {
             CGEventTapEnable(listener.tap.load(Ordering::Relaxed), true)
@@ -68,9 +77,10 @@ extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, info: *mut c_void) ->
     event
 }
 
-// calls on_key with the key code of every key press, on this thread, for the
-// life of the app. fails straight away without Input Monitoring permission
-pub fn listen(on_key: impl Fn(i64) + 'static) -> Result<(), &'static str> {
+// calls on_key with the key code of every key press and whether it was a
+// shortcut, on this thread, for the life of the app. fails straight away
+// without Input Monitoring permission
+pub fn listen(on_key: impl Fn(i64, bool) + 'static) -> Result<(), &'static str> {
     // leaked: the tap hands this pointer to the callback for as long as the
     // tap exists, which is the life of the app
     let listener: &'static Listener = Box::leak(Box::new(Listener {
@@ -99,4 +109,20 @@ pub fn listen(on_key: impl Fn(i64) + 'static) -> Result<(), &'static str> {
         CFRunLoopRun();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_shortcut;
+
+    #[test]
+    fn control_option_and_command_make_a_shortcut_but_shift_does_not() {
+        assert!(!is_shortcut(0));
+        assert!(!is_shortcut(0x0002_0000), "Shift alone types a capital, a normal key");
+        assert!(is_shortcut(0x0004_0000));
+        assert!(is_shortcut(0x0008_0000));
+        assert!(is_shortcut(0x0010_0000));
+        // VoiceOver's keys: Control and Option together
+        assert!(is_shortcut(0x0004_0000 | 0x0008_0000));
+    }
 }

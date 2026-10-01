@@ -91,7 +91,10 @@ listen("nudge://overlay", (event) => renderAlso(event.payload.also))
       $("overlay-idea").textContent = BREAK_IDEAS[s.count_total % BREAK_IDEAS.length];
       $("overlay-idea").hidden = false;
     }
-    $("overlay").setAttribute("aria-describedby", s.break_ideas ? "overlay-idea overlay-also" : "overlay-also");
+    $("overlay").setAttribute(
+      "aria-describedby",
+      s.break_ideas ? "overlay-idea overlay-also overlay-hint" : "overlay-also overlay-hint",
+    );
     renderAlso(s.also);
 
     if (s.snooze_mins > 0) {
@@ -146,9 +149,21 @@ $("snooze").addEventListener("click", (event) => {
 // keys that move focus or start a shortcut never dismiss, so the buttons stay reachable
 const NON_DISMISSING = new Set(["Tab", "Shift", "Control", "Alt", "Meta", "CapsLock", "Fn"]);
 
-// press any key to dismiss; a focused button keeps Enter/Space for itself
+// Tab moves between the reminder's buttons only, with no empty stop between them
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab") return;
+  const buttons = [...document.querySelectorAll(".overlay-actions button")].filter((b) => !b.hidden);
+  const at = buttons.indexOf(document.activeElement);
+  const step = event.shiftKey ? buttons.length - 1 : 1;
+  event.preventDefault();
+  buttons[(at + step) % buttons.length].focus();
+});
+
+// press any key to dismiss; a focused button keeps Enter/Space for itself, and a
+// key held with Control, Option or Command is a shortcut (VoiceOver's among them)
 document.addEventListener("keydown", (event) => {
   if (event.repeat || settling() || NON_DISMISSING.has(event.key)) return;
+  if (event.ctrlKey || event.altKey || event.metaKey) return;
   const onButton = event.target && event.target.closest && event.target.closest("button");
   if (onButton && (event.key === "Enter" || event.key === " ")) return;
   dismiss();

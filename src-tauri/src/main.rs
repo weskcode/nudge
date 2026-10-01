@@ -753,9 +753,10 @@ fn on_wake_main(app: &AppHandle, slept: Duration) {
 #[cfg(target_os = "macos")]
 fn global_key_listener(app: AppHandle) {
     // modifiers never arrive as key presses; Tab moves focus between the
-    // reminder's buttons (and is half of Cmd-Tab), so it doesn't dismiss
-    let result = key_tap::listen(move |keycode| {
-        if keycode == key_tap::TAB {
+    // reminder's buttons, and a key held with Control, Option or Command is a
+    // shortcut (VoiceOver's too), so neither dismisses
+    let result = key_tap::listen(move |keycode, shortcut| {
+        if keycode == key_tap::TAB || shortcut {
             return;
         }
         let handle = app.clone();
