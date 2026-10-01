@@ -9,11 +9,8 @@ It is useful for the Pomodoro Technique and for remembering to get up from your
 desk from time to time.
 
 <p align="center">
-  <img src="ui-tests/overlay-frosted-2026-09-30.png" alt="A reminder on screen in the Frosted style: a glass card over the blurred desktop reading Time to step away, with a break idea, Snooze and Done buttons and a 20 second countdown ring" width="720">
-</p>
-
-<p align="center">
-  <img src="ui-tests/overlay-2026-09-30.png" alt="A reminder on screen: the Card layout in the Ocean style, reading Time to step away, with a break idea, Snooze and Done buttons and a 20 second countdown ring" width="720">
+  <img src="ui-tests/overlay-frosted-2026-09-30.png" alt="A reminder in the Frosted style: a glass card over the blurred desktop reading Time to step away, with a break idea, Snooze and Done buttons and a 20 second countdown ring" width="400">
+  <img src="ui-tests/overlay-2026-09-30.png" alt="The same reminder in the Ocean style" width="400">
 </p>
 
 <p align="center">
@@ -25,15 +22,17 @@ desk from time to time.
   <img src="ui-tests/settings-schedule-2026-09-30.png" alt="The Settings window on the Schedule page, counting down to the next reminder" width="460">
 </p>
 
-## Credits
+## Getting started
 
-`nudge` is inspired by and modeled on
-[remindful](https://github.com/brettferdosi/remindful) by
-[Brett Gutstein](https://brett.gutste.in), a macOS app that did it first.
-Thank you for the idea and the design. `remindful` is a Swift app for macOS;
-`nudge` was written from scratch in Rust with Tauri so it also runs on Windows
-and Linux. The product behavior, the tray toggle, the countdown menu and the
-full-screen reminder pattern all come from `remindful`.
+1. Build and install it (see [Building from source](#building-from-source)).
+   On a Mac, `npm run install:app` puts `Nudge.app` in `/Applications` and
+   opens it.
+2. Click the Nudge icon in the menu bar. The menu shows how long until the
+   next reminder and has Take a Break Now, Pause Reminders and Settings.
+3. In Settings, pick how often to be reminded on the Schedule page and how the
+   reminder looks on the Reminder page. Changes apply right away.
+4. On a Mac, allow Input Monitoring if you want any key to close the reminder
+   (see [Permissions](#permissions-macos)).
 
 ## Features
 
@@ -41,7 +40,8 @@ full-screen reminder pattern all come from `remindful`.
   Take a Break Now, Pause Reminders (30 minutes, 1 hour, 2 hours), on/off,
   Settings and About
 - Full screen reminder over every connected display that stays visible over
-  fullscreen apps and workspaces; on macOS it blurs what is behind it
+  fullscreen apps and workspaces. On macOS the Frosted style shows a blur of
+  what is behind it
 - Click, press Done, or press any key to dismiss; optional Snooze button
 - Interval presets of 15/30/45/60/90 minutes plus a custom value, applied live
 - Up to 8 nudges, each with its own message, interval, symbol, look and
@@ -108,6 +108,16 @@ LaunchAgent in `~/Library/LaunchAgents`.
   and floating above fullscreen apps
 - Windows and Linux: the reminder is a fullscreen always-on-top window
 - Wake-from-sleep detection works on macOS and Linux
+
+## Credits
+
+`nudge` is inspired by and modeled on
+[remindful](https://github.com/brettferdosi/remindful) by
+[Brett Gutstein](https://brett.gutste.in), a macOS app that did it first.
+Thank you for the idea and the design. `remindful` is a Swift app for macOS;
+`nudge` was written from scratch in Rust with Tauri so it also runs on Windows
+and Linux. The product behavior, the tray toggle, the countdown menu and the
+full-screen reminder pattern all come from `remindful`.
 
 ## License
 
