@@ -15,8 +15,7 @@ COMMIT="$(git rev-parse HEAD)"
 
 # build outside the home directory, so the project path Tauri embeds in the
 # binary doesn't contain a user name
-BUILD=/tmp/nudge-release-build
-rm -rf "$BUILD"
+BUILD="$(mktemp -d /tmp/nudge-release.XXXXXX)"
 git clone --quiet --no-hardlinks "$(pwd)" "$BUILD"
 git -C "$BUILD" checkout --quiet --detach "$COMMIT"
 cd "$BUILD"
@@ -46,11 +45,13 @@ if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
 fi
 
 # panic messages embed the source path of every crate, and crates live under
-# ~/.cargo, so rewrite the home directory out of those paths
-export RUSTFLAGS="--remap-path-prefix=$HOME=~"
+# ~/.cargo, so rewrite the home directory out of those paths (the encoded form
+# keeps a home path with spaces in one piece)
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$HOME=~"
 
 npm ci
-npm run tauri build -- --no-bundle
+# --locked: build exactly the crate versions in Cargo.lock
+npm run tauri build -- --no-bundle -- --locked
 
 # strip = true in Cargo.toml runs rust-objcopy, which can fail without failing
 # the build, so strip here before the bundle is signed
@@ -64,7 +65,9 @@ if [ ! -d "$APP" ]; then
   echo "expected bundle not found at $APP" >&2
   exit 1
 fi
-if strings -a "$APP/Contents/MacOS/nudge" | grep -q '/Users/'; then
+# not grep -q: it exits at the first match, strings then dies of SIGPIPE, and
+# pipefail turns that into a failed pipeline, which would skip this check
+if strings -a "$APP/Contents/MacOS/nudge" | grep '/Users/' >/dev/null; then
   echo "the binary still contains a /Users/ path" >&2
   exit 1
 fi
