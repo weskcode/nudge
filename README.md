@@ -1,9 +1,9 @@
 # nudge
 
-`nudge` is a free menu bar app that displays firm but gentle reminders. It
-runs on macOS, Windows and Linux, sits in your menu bar or system tray, and on
-a timer covers every screen with a fullscreen reminder until you dismiss it
-with a click or any key.
+`nudge` is a free, open source menu bar app that displays firm but gentle
+reminders. It runs on macOS, Windows and Linux, sits in your menu bar or
+system tray, and on a timer covers every screen with a fullscreen reminder
+until you dismiss it with a click or any key.
 
 It is useful for the Pomodoro Technique and for remembering to get up from your
 desk from time to time.
@@ -24,9 +24,11 @@ desk from time to time.
 
 ## Getting started
 
-1. Build and install it (see [Building from source](#building-from-source)).
-   On a Mac, `npm run install:app` puts `Nudge.app` in `/Applications` and
-   opens it.
+1. On an Apple silicon Mac, download the zip from the
+   [latest release](https://github.com/weskcode/nudge/releases/latest), unzip
+   it and move `Nudge.app` to Applications. The app is signed and notarized.
+   On Windows, Linux or an Intel Mac, build it yourself (see
+   [Building from source](#building-from-source)).
 2. Click the Nudge icon in the menu bar. The menu shows how long until the
    next reminder and has Take a Break Now, Pause Reminders and Settings.
 3. In Settings, pick how often to be reminded on the Schedule page and how the
@@ -118,6 +120,10 @@ Thank you for the idea and the design. `remindful` is a Swift app for macOS;
 `nudge` was written from scratch in Rust with Tauri so it also runs on Windows
 and Linux. The product behavior, the tray toggle, the countdown menu and the
 full-screen reminder pattern all come from `remindful`.
+
+## Security
+
+To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## License
 
