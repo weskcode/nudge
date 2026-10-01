@@ -490,7 +490,6 @@ $("enabled-on-wake").addEventListener("change", (e) => save({ enabledOnWake: e.t
 $("reset-on-wake").addEventListener("change", (e) => save({ resetOnWake: e.target.checked }));
 $("launch-at-login").addEventListener("change", (e) => save({ launchAtLogin: e.target.checked }));
 
-
 $("credits").addEventListener("click", (e) => {
   e.preventDefault();
   invoke("open_credits");

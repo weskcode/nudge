@@ -192,7 +192,6 @@ body {
   margin-top: 16px;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.65);
-  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -325,7 +324,6 @@ body {
 .t-orange { background: linear-gradient(#ffa040, #ff7a1a); }
 .t-yellow { background: linear-gradient(#ffd23f, #f5a900); }
 .t-purple { background: linear-gradient(#b67cff, #8a4dff); }
-.t-pink { background: linear-gradient(#ff7aa8, #ff2d6f); }
 .t-green { background: linear-gradient(#3fd479, #1fae55); }
 .t-teal { background: linear-gradient(#4fd0e0, #1ea8c4); }
 .t-red { background: linear-gradient(#ff6b6b, #ff3b30); }
