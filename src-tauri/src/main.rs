@@ -777,6 +777,15 @@ fn tick(app: &AppHandle) {
 
 const CHIME: &[u8] = include_bytes!("assets/chime.wav");
 
+// the chime is written out for the system player to read. it goes in this
+// user's cache folder: a fixed name in the shared temp folder could be a link
+// another user planted
+fn chime_path() -> Option<PathBuf> {
+    let dir = dirs::cache_dir()?.join("nudge");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("chime.wav"))
+}
+
 fn play_sound(name: &str) {
     // macOS ships the other sounds; everywhere else they fall back to the chime
     #[cfg(target_os = "macos")]
@@ -793,7 +802,7 @@ fn play_sound(name: &str) {
         }
     }
     let _ = name;
-    let path = std::env::temp_dir().join("nudge-chime.wav");
+    let Some(path) = chime_path() else { return };
     if let Ok(mut file) = std::fs::File::create(&path) {
         use std::io::Write;
         let _ = file.write_all(CHIME);
@@ -1401,10 +1410,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        config_json, hms, new_id, parse_config, replace_file, AlsoNow, Config, Nudge,
-        NudgeState, OverlayState, PublicState,
+        chime_path, config_json, hms, new_id, parse_config, replace_file, AlsoNow, Config,
+        Nudge, NudgeState, OverlayState, PublicState,
     };
     use serde::Deserialize;
+
+    #[test]
+    fn chime_goes_in_the_users_own_cache_folder() {
+        // never the shared temp folder, where on Linux another user could
+        // plant a link at a fixed name and have the chime written through it
+        let path = chime_path().unwrap();
+        assert!(path.starts_with(dirs::cache_dir().unwrap().join("nudge")));
+        assert!(!path.starts_with(std::env::temp_dir()));
+        assert!(path.parent().unwrap().is_dir());
+    }
 
     #[test]
     fn config_from_0_1_0_loads_with_new_defaults() {
