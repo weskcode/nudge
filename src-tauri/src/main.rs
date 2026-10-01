@@ -611,22 +611,7 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
         match builder.build() {
             Ok(window) => {
                 #[cfg(target_os = "macos")]
-                {
-                    unsafe {
-                        use objc::{msg_send, sel, sel_impl};
-                        use cocoa::base::id;
-                        // without a native window the reminder still shows, just
-                        // not above fullscreen apps; no reason to crash over it
-                        if let Ok(ns_window) = window.ns_window() {
-                            let ns_window = ns_window as id;
-                            const NS_MAIN_MENU_WINDOW_LEVEL: i64 = 24;
-                            let _: () = msg_send![ns_window, setLevel: NS_MAIN_MENU_WINDOW_LEVEL];
-                            let behavior: u64 = msg_send![ns_window, collectionBehavior];
-                            let combined = behavior | 1 << 0 | 1 << 8;
-                            let _: () = msg_send![ns_window, setCollectionBehavior: combined];
-                        }
-                    }
-                }
+                float_over_everything(&window);
                 opened.push(label);
             }
             Err(error) => println!("overlay {label} failed to create: {error:?}"),
@@ -1296,41 +1281,66 @@ const ABOUT_CREDITS: &str =
 // behind the frontmost app. name, version and icon come from the bundle
 #[cfg(target_os = "macos")]
 fn show_about(app: &AppHandle) {
-    use cocoa::base::{id, nil, YES};
-    use cocoa::foundation::NSString;
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc2::runtime::AnyObject;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{
+        NSAboutPanelOptionCredits, NSAboutPanelOptionVersion, NSApplication, NSColor, NSFont,
+        NSFontAttributeName, NSForegroundColorAttributeName, NSMutableParagraphStyle,
+        NSParagraphStyleAttributeName, NSTextAlignment,
+    };
+    use objc2_foundation::{NSAttributedString, NSDictionary, NSString};
+
     let _ = app.show();
+    // menu clicks arrive on the main thread, where AppKit has to be used
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let ns_app = NSApplication::sharedApplication(mtm);
+    #[allow(deprecated)]
+    ns_app.activateIgnoringOtherApps(true);
+
+    // credits in the small secondary system style the panel uses elsewhere;
+    // a bare attributed string falls back to 12pt Helvetica in black
+    let font = NSFont::systemFontOfSize(NSFont::smallSystemFontSize());
+    let color = NSColor::secondaryLabelColor();
+    let paragraph = NSMutableParagraphStyle::new();
+    paragraph.setAlignment(NSTextAlignment::Center);
+    // SAFETY: AppKit's attribute and option keys are constant NSStrings, and
+    // each value is the type its key expects
     unsafe {
-        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
-        let _: () = msg_send![ns_app, activateIgnoringOtherApps: YES];
-        // credits in the small secondary system style the panel uses elsewhere;
-        // a bare attributed string falls back to 12pt Helvetica in black
-        let size: f64 = msg_send![class!(NSFont), smallSystemFontSize];
-        let font: id = msg_send![class!(NSFont), systemFontOfSize: size];
-        let color: id = msg_send![class!(NSColor), secondaryLabelColor];
-        let paragraph: id = msg_send![class!(NSMutableParagraphStyle), new];
-        // NSTextAlignmentCenter is 1 on Apple silicon and 2 on Intel
-        let center: i64 = if cfg!(target_arch = "x86_64") { 2 } else { 1 };
-        let _: () = msg_send![paragraph, setAlignment: center];
-        let attr_keys = [
-            NSString::alloc(nil).init_str("NSFont"),
-            NSString::alloc(nil).init_str("NSColor"),
-            NSString::alloc(nil).init_str("NSParagraphStyle"),
-        ];
-        let attr_values = [font, color, paragraph];
-        let attrs: id = msg_send![class!(NSDictionary), dictionaryWithObjects: attr_values.as_ptr() forKeys: attr_keys.as_ptr() count: 3usize];
-        let text = NSString::alloc(nil).init_str(ABOUT_CREDITS);
-        let credits: id = msg_send![class!(NSAttributedString), alloc];
-        let credits: id = msg_send![credits, initWithString: text attributes: attrs];
-        // an empty build version drops the repeated "(0.1.0)" after the version
-        let option_keys = [
-            NSString::alloc(nil).init_str("Credits"),
-            NSString::alloc(nil).init_str("Version"),
-        ];
-        let option_values = [credits, NSString::alloc(nil).init_str("")];
-        let options: id = msg_send![class!(NSDictionary), dictionaryWithObjects: option_values.as_ptr() forKeys: option_keys.as_ptr() count: 2usize];
-        let _: () = msg_send![ns_app, orderFrontStandardAboutPanelWithOptions: options];
+        let attributes = NSDictionary::<NSString, AnyObject>::from_slices(
+            &[NSFontAttributeName, NSForegroundColorAttributeName, NSParagraphStyleAttributeName],
+            &[font.as_ref(), color.as_ref(), paragraph.as_ref()],
+        );
+        let credits = NSAttributedString::new_with_attributes(&NSString::from_str(ABOUT_CREDITS), &attributes);
+        // an empty build version drops the repeated "(1.0.5)" after the version
+        let no_build = NSString::from_str("");
+        let options = NSDictionary::<NSString, AnyObject>::from_slices(
+            &[NSAboutPanelOptionCredits, NSAboutPanelOptionVersion],
+            &[credits.as_ref(), no_build.as_ref()],
+        );
+        ns_app.orderFrontStandardAboutPanelWithOptions(&options);
     }
+}
+
+// a reminder window above the menu bar and fullscreen apps, on every Space.
+// without a native window the reminder still shows, just not over those
+#[cfg(target_os = "macos")]
+fn float_over_everything(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+    let Ok(pointer) = window.ns_window() else {
+        return;
+    };
+    // SAFETY: Tauri hands back the window's live NSWindow, and reminders are
+    // opened on the main thread
+    let ns_window: &NSWindow = unsafe { &*pointer.cast() };
+    const NS_MAIN_MENU_WINDOW_LEVEL: isize = 24;
+    ns_window.setLevel(NS_MAIN_MENU_WINDOW_LEVEL);
+    ns_window.setCollectionBehavior(
+        ns_window.collectionBehavior()
+            | NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
 }
 
 #[tauri::command]

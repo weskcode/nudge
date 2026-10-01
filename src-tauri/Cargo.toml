@@ -16,8 +16,10 @@ serde_json = "1"
 dirs = "6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.26"
-objc = "0.2"
+# the versions Tauri already uses, so nothing new is downloaded or built
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSDictionary", "NSAttributedString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSFont", "NSColor", "NSParagraphStyle", "NSText", "NSAttributedString"] }
 
 [dependencies.tauri-plugin-autostart]
 version = "2"
