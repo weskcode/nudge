@@ -9,6 +9,10 @@ It is useful for the Pomodoro Technique and for remembering to get up from your
 desk from time to time.
 
 <p align="center">
+  <img src="ui-tests/overlay-frosted-2026-09-30.png" alt="A reminder on screen in the Frosted style: a glass card over the blurred desktop reading Time to step away, with a break idea, Snooze and Done buttons and a 20 second countdown ring" width="720">
+</p>
+
+<p align="center">
   <img src="ui-tests/overlay-2026-09-30.png" alt="A reminder on screen: the Card layout in the Ocean style, reading Time to step away, with a break idea, Snooze and Done buttons and a 20 second countdown ring" width="720">
 </p>
 
