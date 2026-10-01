@@ -97,6 +97,10 @@ certificate in your keychain (override with `APPLE_SIGNING_IDENTITY`). A
 stable signature lets macOS remember the Input Monitoring permission across
 updates. Without a certificate the app is ad-hoc signed.
 
+Published releases are built with `sh scripts/build-release.sh`. It builds
+the signed app from a clean copy of the current commit, removes home folder
+paths from the binary and strips it. Notarizing is a separate step.
+
 ## Permissions (macOS)
 
 To close the reminder with any key while another app is frontmost, Nudge
