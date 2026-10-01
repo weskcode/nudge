@@ -163,6 +163,13 @@ function renderPreview(n, message = n.message) {
   if (before && before !== preview.className) replayPreview();
 }
 
+// says what the selected layout looks like; the ring only counts down with a break length
+function layoutNote(n) {
+  if (n.layout === "card") return "Your message on a glass card";
+  if (n.layout === "ring") return n.auto_dismiss_secs > 0 ? "A large ring counts down the break" : "A large ring around the symbol";
+  return "Your message right on the backdrop";
+}
+
 // a nudge's tile wears its symbol in the colour of its reminder style
 function paintTile(tile, use, n) {
   tile.className = `tile n-${n.style}`;
@@ -249,6 +256,9 @@ function render(s) {
   setRadio("layout", n.layout);
 
   setSelect($("auto-dismiss"), n.auto_dismiss_secs, (v) => `${v} seconds`);
+  $("layout-note").textContent = layoutNote(n);
+  $("break-note").textContent =
+    n.auto_dismiss_secs > 0 ? "The reminder closes by itself after this long" : "The reminder stays until you close it";
   setSelect($("snooze"), n.snooze_mins, (v) => plural(v, "minute"));
   $("sound").value = n.play_sound ? n.sound : "none";
   if ($("sound").selectedIndex < 0) $("sound").value = "chime"; // a macOS-only sound elsewhere
