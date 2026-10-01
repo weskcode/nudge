@@ -37,6 +37,25 @@ function breakLabel(secs) {
 }
 
 // other nudges that came due with this one, each with its symbol
+// a long message at a large text size can be taller than a small screen;
+// shrink the message until the whole reminder, buttons included, fits
+function fitReminder() {
+  const title = $("overlay-text");
+  const reminder = document.querySelector(".reminder");
+  title.style.fontSize = "";
+  const margin = 16;
+  const fits = () => {
+    const box = reminder.getBoundingClientRect();
+    return box.top >= margin && box.bottom <= innerHeight - margin;
+  };
+  let size = parseFloat(getComputedStyle(title).fontSize);
+  while (!fits() && size > 20) {
+    size *= 0.9;
+    title.style.fontSize = `${size}px`;
+  }
+}
+addEventListener("resize", fitReminder);
+
 function renderAlso(also) {
   const line = $("overlay-also");
   const items = also.map((nudge) => {
@@ -53,6 +72,7 @@ function renderAlso(also) {
   label.className = "lbl";
   label.textContent = "Also now";
   line.replaceChildren(...(items.length ? [label, ...items] : []));
+  fitReminder();
 }
 
 // listen first, so a nudge that joins while the page asks isn't missed; the
@@ -88,6 +108,7 @@ listen("nudge://overlay", (event) => renderAlso(event.payload.also))
 
     // SVG elements have no .hidden property; the ring layout always shows the ring
     if (s.auto_dismiss_secs > 0 || s.layout === "ring") document.querySelector(".ring").removeAttribute("hidden");
+    fitReminder();
 
     // give VoiceOver and the keyboard a control to start from; Enter and Space on
     // a button are already kept out of press-any-key
