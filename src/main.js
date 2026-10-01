@@ -188,7 +188,7 @@ function renderPicker(s, n) {
   if (key !== pickerSignature) {
     pickerSignature = key;
     const full = s.nudges.length >= MAX_NUDGES;
-    const add = new Option(full ? `New Nudge… (up to ${MAX_NUDGES})` : "New Nudge…", "new");
+    const add = new Option(full ? `New Nudge… (${MAX_NUDGES} is the limit)` : "New Nudge…", "new");
     add.disabled = full;
     const remove = new Option(`Delete “${clip(n.message, 24)}”`, "delete");
     remove.disabled = s.nudges.length <= 1;
@@ -215,6 +215,7 @@ function fitToChoice(select) {
 }
 
 function selectNudge(id) {
+  flushIntervalSave();
   selectedId = id;
   customMode = false;
   try {
@@ -225,8 +226,9 @@ function selectNudge(id) {
 
 function render(s) {
   state = s;
+  // set the alert's text only when it changes, so VoiceOver reads it once
   $("problem").hidden = !s.problem;
-  $("problem").textContent = s.problem || "";
+  if ($("problem").textContent !== (s.problem || "")) $("problem").textContent = s.problem || "";
   // 0 while a nudge is on screen, -1 with no timer
   deadlines = new Map(
     s.nudges
@@ -414,13 +416,25 @@ $("nudge-enabled").addEventListener("change", (e) => saveNudge({ enabled: e.targ
 // arrowing through the choices saves only where it stops, since each save
 // restarts the timer; only a click on Custom moves focus into its field
 let intervalClicked = false;
-let intervalSave = 0;
+// the nudge it belongs to is fixed when the choice is made, and switching
+// nudges saves it straight away rather than onto the next one
+let intervalSave = null;
+function flushIntervalSave() {
+  if (!intervalSave) return;
+  clearTimeout(intervalSave.timer);
+  const { id, secs } = intervalSave;
+  intervalSave = null;
+  call("set_nudge", { id, intervalSecs: secs });
+}
 $("interval").addEventListener("pointerdown", () => (intervalClicked = true));
+// a press that changed nothing must not make the next arrow key count as a click
+$("interval").addEventListener("click", () => setTimeout(() => (intervalClicked = false)));
 document.querySelectorAll('input[name="interval"]').forEach((input) => {
   input.addEventListener("change", () => {
     const clicked = intervalClicked;
     intervalClicked = false;
-    clearTimeout(intervalSave);
+    if (intervalSave) clearTimeout(intervalSave.timer);
+    intervalSave = null;
     if (input.value === "custom") {
       customMode = true;
       $("custom-row").classList.remove("collapsed");
@@ -432,8 +446,8 @@ document.querySelectorAll('input[name="interval"]').forEach((input) => {
       return;
     }
     customMode = false;
-    const secs = Number(input.value) * 60;
-    intervalSave = setTimeout(() => saveNudge({ intervalSecs: secs }), clicked ? 0 : 600);
+    intervalSave = { id: current().id, secs: Number(input.value) * 60, timer: 0 };
+    intervalSave.timer = setTimeout(flushIntervalSave, clicked ? 0 : 600);
   });
 });
 
