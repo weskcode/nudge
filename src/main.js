@@ -109,7 +109,24 @@ function renderStatus() {
   }
 
   if ($("status-title").textContent !== title) $("status-title").textContent = title;
-  $("status-detail").textContent = detail;
+  // with several nudges the name shortens with an ellipsis, never the time
+  const status = $("status-detail");
+  if (status.dataset.shown !== detail) {
+    status.dataset.shown = detail;
+    const when = nextName && detail.startsWith(nextName) ? detail.slice(nextName.length) : null;
+    status.classList.toggle("named", when !== null);
+    if (when === null) {
+      status.textContent = detail;
+    } else {
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = nextName;
+      const time = document.createElement("span");
+      time.className = "when";
+      time.textContent = when.trim();
+      status.replaceChildren(name, time);
+    }
+  }
   $("countdown-label").textContent = label;
   $("countdown-time").textContent = time;
   $("countdown-detail").textContent = info;
@@ -421,18 +438,32 @@ $("nudge-select").addEventListener("change", async (e) => {
 });
 
 // Delete happens at once; for a few seconds after, Undo brings the nudge back
+// the bar stays while the pointer or keyboard is on it
 let undoTimer = 0;
-function offerUndo(name) {
+const hideUndoLater = (ms = 8000) => {
   clearTimeout(undoTimer);
-  $("undo-text").textContent = `Deleted “${clip(name, 40)}”`;
+  undoTimer = setTimeout(() => ($("undo").hidden = true), ms);
+};
+function offerUndo(name) {
   $("undo").hidden = false;
-  undoTimer = setTimeout(() => ($("undo").hidden = true), 8000);
+  $("undo-button").hidden = false;
+  // filled in once visible, so VoiceOver announces it, even for the same name twice
+  $("undo-text").textContent = "";
+  requestAnimationFrame(() => ($("undo-text").textContent = `Deleted “${clip(name, 40)}”`));
+  hideUndoLater();
 }
+for (const type of ["mouseenter", "focusin"]) $("undo").addEventListener(type, () => clearTimeout(undoTimer));
+for (const type of ["mouseleave", "focusout"]) $("undo").addEventListener(type, () => hideUndoLater(4000));
 $("undo-button").addEventListener("click", async () => {
   clearTimeout(undoTimer);
-  $("undo").hidden = true;
   const id = await call("undo_delete");
-  if (id == null) return;
+  if (id == null) {
+    $("undo-button").hidden = true;
+    $("undo-text").textContent = `Can’t undo: ${MAX_NUDGES} nudges is the limit`;
+    hideUndoLater(5000);
+    return;
+  }
+  $("undo").hidden = true;
   state = await invoke("get_state");
   selectNudge(id);
   $("nudge-select").focus();

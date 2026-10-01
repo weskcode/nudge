@@ -285,6 +285,9 @@ body {
 .status-text { flex: 1; min-width: 0; white-space: nowrap; }
 .status h1 { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .status p { font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+.status p.named { display: flex; }
+.status p.named .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status p.named .when { flex: none; margin-left: 0.3em; }
 .status input { transform: scale(0.82); transform-origin: right center; }
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
@@ -305,7 +308,7 @@ body {
 .nav button:active { background: var(--track); }
 .nav button[aria-selected="true"] { background: var(--accent); color: #fff; }
 .inactive .nav button[aria-selected="true"] { background: var(--track); color: inherit; }
-.nav button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 0; }
+.nav button:focus-visible { outline: 3px solid var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 0; }
 
 /* SF-style glyph in a squircle */
 .tile {
@@ -441,6 +444,8 @@ input[type="text"], input[type="number"] {
 input[type="text"] { width: 210px; flex: none; }
 input[type="number"] { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
 input:focus-visible, select:focus-visible, button:focus-visible {
+  /* the first line is for WebKit before 16.2, which has no color-mix() */
+  outline: 3px solid var(--accent);
   outline: 3px solid color-mix(in srgb, var(--accent) 50%, transparent);
   outline-offset: 0;
 }
@@ -495,7 +500,7 @@ button {
   transition: background-color var(--t-fast) var(--ease-out), box-shadow var(--t-fast) var(--ease-out);
 }
 .segmented input:checked + span { background: var(--control); box-shadow: var(--raised); }
-.segmented input:focus-visible + span { outline: 3px solid color-mix(in srgb, var(--accent) 50%, transparent); }
+.segmented input:focus-visible + span { outline: 3px solid var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 50%, transparent); }
 .symbols span { display: grid; place-items: center; padding: 3px 9px; }
 .symbols svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -639,7 +644,7 @@ button {
 .styles input:checked ~ .thumb { outline-color: var(--accent); }
 .styles span { opacity: 0.7; transition: opacity var(--t-fast) var(--ease-out); }
 .styles input:checked ~ span { opacity: 1; font-weight: 600; }
-.styles input:focus-visible ~ .thumb { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent); }
+.styles input:focus-visible ~ .thumb { box-shadow: 0 0 0 3px var(--accent); box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent); }
 /* each swatch is a miniature of the reminder: the stand-in desktop under that style's tint */
 .styles .thumb::before {
   content: "";
