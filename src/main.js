@@ -187,8 +187,9 @@ function renderPicker(s, n) {
   const key = JSON.stringify([n.id, s.nudges.map((x) => [x.id, x.message])]);
   if (key !== pickerSignature) {
     pickerSignature = key;
-    const add = new Option("New Nudge…", "new");
-    add.disabled = s.nudges.length >= MAX_NUDGES;
+    const full = s.nudges.length >= MAX_NUDGES;
+    const add = new Option(full ? `New Nudge… (up to ${MAX_NUDGES})` : "New Nudge…", "new");
+    add.disabled = full;
     const remove = new Option(`Delete “${clip(n.message, 24)}”`, "delete");
     remove.disabled = s.nudges.length <= 1;
     select.replaceChildren(
@@ -315,13 +316,16 @@ function showPage(name, focus = false) {
 
 tabs.forEach((tab) => tab.addEventListener("click", () => showPage(tab.dataset.page)));
 
-// arrow keys move through the sidebar, like a native source list
+// arrow keys move through the sidebar, like a native source list; Home and End jump to the ends
 document.querySelector(".nav").addEventListener("keydown", (e) => {
-  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
   e.preventDefault();
   const visible = tabs.filter((t) => !t.hidden);
   const at = visible.indexOf(document.activeElement);
-  const next = visible[(at + (e.key === "ArrowDown" ? 1 : visible.length - 1)) % visible.length];
+  const next =
+    e.key === "Home" ? visible[0]
+    : e.key === "End" ? visible[visible.length - 1]
+    : visible[(at + (e.key === "ArrowDown" ? 1 : visible.length - 1)) % visible.length];
   showPage(next.dataset.page, true);
 });
 

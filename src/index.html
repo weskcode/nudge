@@ -170,8 +170,8 @@
             </div>
             <div class="row">
               <span class="tile t-yellow"><svg><use href="#i-bulb"/></svg></span>
-              <label class="text" for="break-ideas">Suggest a break idea<small>A different small action each time</small></label>
-              <input id="break-ideas" type="checkbox" switch />
+              <span class="text"><label for="break-ideas">Suggest a break idea</label><small id="break-ideas-note">A different small action each time</small></span>
+              <input id="break-ideas" aria-describedby="break-ideas-note" type="checkbox" switch />
             </div>
             <div class="row">
               <span class="tile t-purple"><svg><use href="#i-textsize"/></svg></span>
@@ -206,8 +206,8 @@
             </div>
             <div class="row">
               <span class="tile t-indigo"><svg><use href="#i-moon"/></svg></span>
-              <label class="text" for="snooze">Snooze button<small>Put the reminder off for a few minutes</small></label>
-              <select id="snooze">
+              <span class="text"><label for="snooze">Snooze button</label><small id="snooze-note">Put the reminder off for a few minutes</small></span>
+              <select id="snooze" aria-describedby="snooze-note">
                 <option value="0">Off</option>
                 <option value="1">1 minute</option>
                 <option value="5">5 minutes</option>
@@ -217,8 +217,8 @@
             </div>
             <div class="row">
               <span class="tile t-red"><svg><use href="#i-speaker"/></svg></span>
-              <label class="text" for="sound">Sound<small>Plays when a reminder appears</small></label>
-              <select id="sound">
+              <span class="text"><label for="sound">Sound</label><small id="sound-note">Plays when a reminder appears</small></span>
+              <select id="sound" aria-describedby="sound-note">
                 <option value="none">None</option>
                 <option value="chime">Chime</option>
                 <option value="glass" data-mac>Glass</option>
@@ -243,8 +243,8 @@
           <div class="group icons">
             <div class="row">
               <span class="tile t-gray"><svg><use href="#i-timer"/></svg></span>
-              <label class="text" for="menu-bar-timer">Show time left<small>A heads-up before the next reminder</small></label>
-              <select id="menu-bar-timer">
+              <span class="text"><label for="menu-bar-timer">Show time left</label><small id="menu-bar-timer-note">A heads-up before the next reminder</small></span>
+              <select id="menu-bar-timer" aria-describedby="menu-bar-timer-note">
                 <option value="never">Never</option>
                 <option value="last5">In the last 5 minutes</option>
                 <option value="always">Always</option>
@@ -255,16 +255,16 @@
 
         <section class="page" id="page-wake" role="tabpanel" aria-labelledby="tab-wake" data-title="Sleep &amp; Wake" hidden>
           <h3 id="h-wake">After your computer wakes</h3>
-          <div class="group icons">
+          <div class="group icons" role="group" aria-labelledby="h-wake">
             <div class="row">
               <span class="tile t-orange"><svg><use href="#i-sun"/></svg></span>
-              <label class="text" for="enabled-on-wake">Turn reminders on<small>Even if you turned them off before</small></label>
-              <input id="enabled-on-wake" type="checkbox" switch />
+              <span class="text"><label for="enabled-on-wake">Turn reminders on</label><small id="enabled-on-wake-note">Even if you turned them off before</small></span>
+              <input id="enabled-on-wake" aria-describedby="enabled-on-wake-note" type="checkbox" switch />
             </div>
             <div class="row">
               <span class="tile t-blue"><svg><use href="#i-restart"/></svg></span>
-              <label class="text" for="reset-on-wake">Restart the timer<small>Time away counts as a break</small></label>
-              <input id="reset-on-wake" type="checkbox" switch />
+              <span class="text"><label for="reset-on-wake">Restart the timer</label><small id="reset-on-wake-note">Time away counts as a break</small></span>
+              <input id="reset-on-wake" aria-describedby="reset-on-wake-note" type="checkbox" switch />
             </div>
           </div>
         </section>
