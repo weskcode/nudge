@@ -119,6 +119,8 @@ struct PublicState {
     enabled: bool,
     showing: bool,
     nudges: Vec<NudgeState>,
+    // a change that didn't stick, for Settings to say so
+    problem: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -156,6 +158,26 @@ struct App {
     tray: Mutex<Option<TrayIcon<Wry>>>,
     pause_menu: Mutex<Option<Submenu<Wry>>>,
     last_label: Mutex<String>,
+    problems: Mutex<Problems>,
+}
+
+// what last failed; each clears when the same kind of change next succeeds
+#[derive(Default)]
+struct Problems {
+    save: bool,
+    login_item: bool,
+}
+
+impl Problems {
+    fn text(&self) -> Option<String> {
+        if self.save {
+            Some("Settings couldn't be saved, so changes will be lost when Nudge quits.".into())
+        } else if self.login_item {
+            Some("Open at login couldn't be changed.".into())
+        } else {
+            None
+        }
+    }
 }
 
 // keys typed in the moment a reminder opens were meant for another app;
@@ -163,12 +185,11 @@ struct App {
 #[cfg(target_os = "macos")]
 const DISMISS_GRACE: Duration = Duration::from_millis(1500);
 
-fn config_path() -> PathBuf {
-    let dir = dirs::config_dir()
-        .map(|d| d.join("nudge"))
-        .expect("cannot resolve config directory");
+// None only without a home folder; a failed create_dir_all shows up when the save fails
+fn config_path() -> Option<PathBuf> {
+    let dir = dirs::config_dir()?.join("nudge");
     let _ = fs::create_dir_all(&dir);
-    dir.join("config.json")
+    Some(dir.join("config.json"))
 }
 
 // config.json from any version: before there could be several nudges, the one
@@ -250,7 +271,7 @@ fn config_json(config: &Config) -> serde_json::Value {
 }
 
 fn load_config() -> Config {
-    load_from(&config_path())
+    config_path().map(|path| load_from(&path)).unwrap_or_default()
 }
 
 // a file that exists but can't be read (a bad hand edit, or one written by a
@@ -274,12 +295,17 @@ fn load_from(path: &std::path::Path) -> Config {
 }
 
 fn save_config(app: &AppHandle) {
-    let json = config_json(&app.state::<App>().config.lock().unwrap());
-    if let Ok(text) = serde_json::to_string_pretty(&json) {
-        if let Err(error) = replace_file(&config_path(), &text) {
-            println!("saving settings failed: {error:?}");
-        }
+    let state = app.state::<App>();
+    let json = config_json(&state.config.lock().unwrap());
+    let result = match (serde_json::to_string_pretty(&json), config_path()) {
+        (Ok(text), Some(path)) => replace_file(&path, &text),
+        (Err(error), _) => Err(std::io::Error::other(error)),
+        (_, None) => Err(std::io::Error::other("no config folder")),
+    };
+    if let Err(error) = &result {
+        println!("saving settings failed: {error:?}");
     }
+    state.problems.lock().unwrap().save = result.is_err();
 }
 
 // write beside the file, then rename over it, so a write that fails part way
@@ -308,6 +334,7 @@ fn enabled_timers(nudges: &[Nudge]) -> Vec<(u32, Duration)> {
 
 fn snapshot(app: &AppHandle) -> PublicState {
     let state = app.state::<App>();
+    let problem = state.problems.lock().unwrap().text();
     let config = state.config.lock().unwrap().clone();
     let schedule = state.schedule.lock().unwrap();
     let now = Instant::now();
@@ -326,6 +353,7 @@ fn snapshot(app: &AppHandle) -> PublicState {
         menu_bar_timer: config.menu_bar_timer,
         enabled: schedule.on,
         showing: schedule.showing.is_some(),
+        problem,
     }
 }
 
@@ -999,10 +1027,11 @@ fn set_config(
         } else {
             autostart.disable()
         };
-        match result {
+        match &result {
             Ok(()) => state.config.lock().unwrap().launch_at_login = enable,
             Err(error) => println!("launch at login change failed: {error:?}"),
         }
+        state.problems.lock().unwrap().login_item = result.is_err();
     }
     save_config(&app);
     refresh_tray(&app);
@@ -1265,6 +1294,7 @@ fn main() {
             tray: Mutex::new(None),
             pause_menu: Mutex::new(None),
             last_label: Mutex::new(String::new()),
+            problems: Mutex::new(Problems::default()),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -1438,7 +1468,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        chime_path, config_json, hms, load_from, new_id, parse_config, replace_file, AlsoNow,
+        chime_path, config_json, hms, load_from, Problems, new_id, parse_config, replace_file, AlsoNow,
         Config, Nudge, NudgeState, OverlayState, PublicState, MAX_NUDGES,
     };
     use serde::Deserialize;
@@ -1503,6 +1533,19 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "{ not json");
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_save_outranks_a_failed_login_item_and_clears_once_fixed() {
+        let mut problems = Problems::default();
+        assert_eq!(problems.text(), None);
+        problems.login_item = true;
+        assert!(problems.text().unwrap().contains("Open at login"));
+        problems.save = true;
+        assert!(problems.text().unwrap().contains("couldn't be saved"));
+        problems.save = false;
+        problems.login_item = false;
+        assert_eq!(problems.text(), None);
     }
 
     #[test]
@@ -1710,6 +1753,7 @@ mod tests {
             menu_bar_timer: "never".into(),
             enabled: true,
             showing: false,
+            problem: None,
             nudges: vec![NudgeState {
                 nudge: Nudge::default(),
                 remaining_secs: 42,
@@ -1718,7 +1762,7 @@ mod tests {
         let json = serde_json::to_value(state).unwrap();
         for key in [
             "enabled_on_wake", "reset_on_wake", "launch_at_login", "menu_bar_timer",
-            "enabled", "showing",
+            "enabled", "showing", "problem",
         ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }

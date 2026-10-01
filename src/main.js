@@ -224,6 +224,8 @@ function selectNudge(id) {
 
 function render(s) {
   state = s;
+  $("problem").hidden = !s.problem;
+  $("problem").textContent = s.problem || "";
   // 0 while a nudge is on screen, -1 with no timer
   deadlines = new Map(
     s.nudges
@@ -272,15 +274,21 @@ function render(s) {
   renderStatus();
 }
 
+// a command that fails puts the controls back to what is actually stored
+function call(command, args) {
+  return invoke(command, args).catch((error) => {
+    console.error(`${command} failed`, error);
+    return invoke("get_state").then(render).then(() => undefined, () => undefined);
+  });
+}
+
 function save(fields) {
-  return invoke("set_config", fields).catch((error) => console.error("saving settings failed", error));
+  return call("set_config", fields);
 }
 
 // settings that belong to the nudge being edited
 function saveNudge(fields) {
-  return invoke("set_nudge", { id: current().id, ...fields }).catch((error) =>
-    console.error("saving the nudge failed", error),
-  );
+  return call("set_nudge", { id: current().id, ...fields });
 }
 
 // ----- sidebar navigation -----
@@ -366,7 +374,7 @@ window.__TAURI__.app
 
 // ----- controls -----
 
-$("enabled").addEventListener("change", (e) => invoke("set_enabled", { enabled: e.target.checked }));
+$("enabled").addEventListener("change", (e) => call("set_enabled", { enabled: e.target.checked }));
 
 // a letter or arrow key changes a closed pop-up without opening it; that may
 // pick a nudge, but only a choice made in the open menu adds or deletes one
@@ -382,7 +390,7 @@ $("nudge-select").addEventListener("change", async (e) => {
   const typed = performance.now() - lastPickerKey.at < 500 && lastPickerKey.key !== "Enter" && lastPickerKey.key !== " ";
   if (typed && (choice === "new" || choice === "delete")) return;
   if (choice === "new") {
-    const id = await invoke("add_nudge");
+    const id = await call("add_nudge");
     if (id == null) return;
     state = await invoke("get_state");
     selectNudge(id);
@@ -391,7 +399,7 @@ $("nudge-select").addEventListener("change", async (e) => {
     $("message").focus();
     $("message").select();
   } else if (choice === "delete") {
-    await invoke("delete_nudge", { id: current().id });
+    await call("delete_nudge", { id: current().id });
   } else {
     selectNudge(Number(choice));
   }
@@ -441,7 +449,7 @@ document.querySelectorAll('input[name="text-size"]').forEach((input) =>
 document.querySelectorAll('input[name="layout"]').forEach((input) =>
   input.addEventListener("change", () => saveNudge({ layout: input.value })),
 );
-$("preview").addEventListener("click", () => invoke("preview_reminder", { id: current().id }));
+$("preview").addEventListener("click", () => call("preview_reminder", { id: current().id }));
 
 $("auto-dismiss").addEventListener("change", (e) => saveNudge({ autoDismissSecs: Number(e.target.value) }));
 $("snooze").addEventListener("change", (e) => saveNudge({ snoozeMins: Number(e.target.value) }));
@@ -451,7 +459,7 @@ $("sound").addEventListener("change", (e) => {
     saveNudge({ playSound: false });
   } else {
     saveNudge({ playSound: true, sound });
-    invoke("preview_sound", { sound });
+    call("preview_sound", { sound });
   }
 });
 $("menu-bar-timer").addEventListener("change", (e) => save({ menuBarTimer: e.target.value }));
