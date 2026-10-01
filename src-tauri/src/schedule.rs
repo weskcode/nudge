@@ -127,6 +127,21 @@ impl Schedule {
         self.resume(timers, now);
     }
 
+    // after a wake that keeps the timers, a pause still loses the time asleep;
+    // nudges it was holding back move with it
+    pub fn shorten_pause(&mut self, slept: Duration, now: Instant) {
+        let Some(old) = self.paused_until else {
+            return;
+        };
+        let until = old.checked_sub(slept).filter(|&until| until > now);
+        for at in self.next.values_mut() {
+            if *at == old {
+                *at = until.unwrap_or(now);
+            }
+        }
+        self.paused_until = until;
+    }
+
     // nothing fires before `until`; a nudge already due later keeps its time
     pub fn pause(&mut self, ids: &[u32], until: Instant) {
         if !self.on {
@@ -488,5 +503,24 @@ mod tests {
         // nothing of the old pause holds a timer started now
         schedule.resume(&[(1, MIN)], now);
         assert_eq!(schedule.remaining(1, now), 60);
+    }
+
+    #[test]
+    fn a_wake_without_a_restart_still_takes_the_sleep_off_a_pause() {
+        let now = Instant::now();
+        let hour = MIN * 60;
+        let mut schedule = on_with(now, &[(1, 600), (2, 4 * 3600)]);
+        schedule.pause(&[1, 2], now + hour * 2);
+        schedule.shorten_pause(hour, now);
+        assert_eq!(schedule.remaining(1, now), 3600, "held to the pause, which now ends in an hour");
+        assert_eq!(schedule.remaining(2, now), 4 * 3600, "due after the pause anyway: untouched");
+    }
+
+    #[test]
+    fn a_wake_with_no_pause_restarts_every_timer_in_full() {
+        let now = Instant::now();
+        let mut schedule = on_with(now, &[(1, 30)]);
+        schedule.after_wake(&[(1, Duration::from_secs(600))], now, MIN * 60);
+        assert_eq!(schedule.remaining(1, now), 600);
     }
 }

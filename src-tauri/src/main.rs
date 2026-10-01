@@ -764,6 +764,8 @@ fn on_wake_main(app: &AppHandle, slept: Duration) {
         // restart the timers but keep what is left of a pause
         let timers = enabled_timers(&nudges(app));
         state.schedule.lock().unwrap().after_wake(&timers, Instant::now(), slept);
+    } else if on {
+        state.schedule.lock().unwrap().shorten_pause(slept, Instant::now());
     }
     refresh_tray(app);
     broadcast(app);
