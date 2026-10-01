@@ -36,7 +36,6 @@ function breakLabel(secs) {
   return secs % 60 === 0 ? plural(secs / 60, "minute") : `${secs} seconds`;
 }
 
-// other nudges that came due with this one, each with its symbol
 // a long message at a large text size can be taller than a small screen;
 // shrink the message until the whole reminder, buttons included, fits
 function fitReminder() {
@@ -44,10 +43,9 @@ function fitReminder() {
   const reminder = document.querySelector(".reminder");
   title.style.fontSize = "";
   const margin = 16;
-  const fits = () => {
-    const box = reminder.getBoundingClientRect();
-    return box.top >= margin && box.bottom <= innerHeight - margin;
-  };
+  // the layout box, which ignores the opening animation's transform
+  const fits = () =>
+    reminder.offsetTop >= margin && reminder.offsetTop + reminder.offsetHeight <= innerHeight - margin;
   let size = parseFloat(getComputedStyle(title).fontSize);
   while (!fits() && size > 20) {
     size *= 0.9;
@@ -56,6 +54,7 @@ function fitReminder() {
 }
 addEventListener("resize", fitReminder);
 
+// other nudges that came due with this one, each with its symbol
 function renderAlso(also) {
   const line = $("overlay-also");
   const items = also.map((nudge) => {
