@@ -27,7 +27,8 @@ desk from time to time.
 1. On an Apple silicon Mac, download the zip from the
    [latest release](https://github.com/weskcode/nudge/releases/latest), unzip
    it and move `Nudge.app` to Applications. The app is signed and notarized
-   and needs macOS 11 or later; it has been tested on macOS 27. On Windows,
+   and needs macOS 11 or later (on macOS 11 and 12, with Safari kept up to
+   date); it has been tested on macOS 27. On Windows,
    Linux or an Intel Mac, build it yourself (see
    [Building from source](#building-from-source)).
 2. Click the Nudge icon in the menu bar. The menu shows how long until the
