@@ -115,7 +115,7 @@ LaunchAgent in `~/Library/LaunchAgents`.
 
 `nudge` is inspired by and modeled on
 [remindful](https://github.com/brettferdosi/remindful) by
-[Brett Gutstein](https://brett.gutste.in), a macOS app that did it first.
+[Brett Gutstein](https://github.com/brettferdosi), a macOS app that did it first.
 Thank you for the idea and the design. `remindful` is a Swift app for macOS;
 `nudge` was written from scratch in Rust with Tauri so it also runs on Windows
 and Linux. The product behavior, the tray toggle, the countdown menu and the
