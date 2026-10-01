@@ -159,6 +159,8 @@ struct App {
     pause_menu: Mutex<Option<Submenu<Wry>>>,
     last_label: Mutex<String>,
     problems: Mutex<Problems>,
+    // the last nudge deleted and where it stood, for Undo
+    deleted: Mutex<Option<(Nudge, usize)>>,
 }
 
 // what last failed; each clears when the same kind of change next succeeds
@@ -1188,7 +1190,9 @@ fn delete_nudge(app: AppHandle, id: u32) {
         if config.nudges.len() <= 1 || !config.nudges.iter().any(|n| n.id == id) {
             return;
         }
-        config.nudges.retain(|n| n.id != id);
+        let index = config.nudges.iter().position(|n| n.id == id).unwrap_or(0);
+        let gone = config.nudges.remove(index);
+        *state.deleted.lock().unwrap() = Some((gone, index));
         // a lone nudge has no switch of its own, so it can't be left off
         match config.nudges.as_mut_slice() {
             [only] if !only.enabled => {
@@ -1208,6 +1212,39 @@ fn delete_nudge(app: AppHandle, id: u32) {
     }
     refresh_tray(&app);
     broadcast(&app);
+}
+
+// put a deleted nudge back where it stood, with its own id unless another
+// nudge has taken it since; None at the limit
+fn restore_nudge(config: &mut Config, mut nudge: Nudge, index: usize) -> Option<u32> {
+    if config.nudges.len() >= MAX_NUDGES {
+        return None;
+    }
+    let at = if config.nudges.iter().any(|n| n.id == nudge.id) {
+        nudge.id = new_id(&config.nudges);
+        config.nudges.len()
+    } else {
+        index.min(config.nudges.len())
+    };
+    let id = nudge.id;
+    config.nudges.insert(at, nudge);
+    Some(id)
+}
+
+// Undo after Delete: the nudge comes back with its settings and a fresh timer
+#[tauri::command]
+fn undo_delete(app: AppHandle) -> Option<u32> {
+    let state = app.state::<App>();
+    let (nudge, index) = state.deleted.lock().unwrap().take()?;
+    let timer = nudge.enabled.then(|| Duration::from_secs(nudge.interval_secs as u64));
+    let id = restore_nudge(&mut state.config.lock().unwrap(), nudge, index)?;
+    save_config(&app);
+    if let Some(after) = timer {
+        state.schedule.lock().unwrap().resume(&[(id, after)], Instant::now());
+    }
+    refresh_tray(&app);
+    broadcast(&app);
+    Some(id)
 }
 
 #[tauri::command]
@@ -1321,6 +1358,7 @@ fn main() {
             pause_menu: Mutex::new(None),
             last_label: Mutex::new(String::new()),
             problems: Mutex::new(Problems::default()),
+            deleted: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -1328,6 +1366,7 @@ fn main() {
             set_nudge,
             add_nudge,
             delete_nudge,
+            undo_delete,
             get_overlay,
             close_overlay,
             snooze,
@@ -1496,7 +1535,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        chime_path, config_json, hms, load_from, Problems, new_id, parse_config, replace_file, AlsoNow,
+        chime_path, config_json, hms, load_from, restore_nudge, Problems, new_id, parse_config, replace_file, AlsoNow,
         Config, Nudge, NudgeState, OverlayState, PublicState, MAX_NUDGES,
     };
     use serde::Deserialize;
@@ -1585,6 +1624,33 @@ mod tests {
         problems.save = false;
         problems.login_item = false;
         assert_eq!(problems.text(), None);
+    }
+
+    #[test]
+    fn an_undone_delete_puts_the_nudge_back_where_it_was() {
+        let mut config = Config::default();
+        config.nudges = (1..=3).map(|id| Nudge { id, ..Nudge::default() }).collect();
+        let gone = config.nudges.remove(1);
+        assert_eq!(restore_nudge(&mut config, gone.clone(), 1), Some(2));
+        assert_eq!(config.nudges.iter().map(|n| n.id).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(config.nudges[1], gone);
+    }
+
+    #[test]
+    fn an_undone_delete_takes_a_fresh_id_if_its_own_was_reused() {
+        let mut config = Config::default();
+        config.nudges = vec![Nudge { id: 1, ..Nudge::default() }, Nudge { id: 2, ..Nudge::default() }];
+        let gone = Nudge { id: 2, message: "water".into(), ..Nudge::default() };
+        assert_eq!(restore_nudge(&mut config, gone, 9), Some(3), "id 2 is taken; it goes at the end");
+        assert_eq!(config.nudges[2].message, "water");
+    }
+
+    #[test]
+    fn an_undone_delete_respects_the_limit() {
+        let mut config = Config::default();
+        config.nudges = (1..=MAX_NUDGES as u32).map(|id| Nudge { id, ..Nudge::default() }).collect();
+        assert_eq!(restore_nudge(&mut config, Nudge { id: 99, ..Nudge::default() }, 0), None);
+        assert_eq!(config.nudges.len(), MAX_NUDGES);
     }
 
     #[test]

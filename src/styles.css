@@ -342,6 +342,10 @@ body {
 .pane-bar { flex: none; display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 24px; }
 .pane-bar h2 { font-size: 15px; font-weight: 700; margin: 0; }
 .pane-bar .grow { flex: 1; align-self: stretch; }
+.undo { flex: none; display: flex; align-items: center; gap: 10px; margin: 0 24px 10px; padding: 6px 6px 6px 12px; border-radius: 8px; font-size: 12px; background: rgba(127, 127, 127, 0.16); }
+.undo[hidden] { display: none; }
+.undo span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.undo button { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
 .problem { flex: none; margin: 0 24px 10px; padding: 8px 12px; border-radius: 8px; font-size: 12px; color: #fff; background: #d70015; }
 
 /* the nudge picker: a pop-up led by the nudge's tile */

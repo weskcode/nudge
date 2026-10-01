@@ -410,10 +410,32 @@ $("nudge-select").addEventListener("change", async (e) => {
     $("message").focus();
     $("message").select();
   } else if (choice === "delete") {
+    const name = current().message || "Untitled";
     await call("delete_nudge", { id: current().id });
+    offerUndo(name);
+    // the picker's own menu is gone; keep the keyboard on the picker
+    $("nudge-select").focus();
   } else {
     selectNudge(Number(choice));
   }
+});
+
+// Delete happens at once; for a few seconds after, Undo brings the nudge back
+let undoTimer = 0;
+function offerUndo(name) {
+  clearTimeout(undoTimer);
+  $("undo-text").textContent = `Deleted “${clip(name, 40)}”`;
+  $("undo").hidden = false;
+  undoTimer = setTimeout(() => ($("undo").hidden = true), 8000);
+}
+$("undo-button").addEventListener("click", async () => {
+  clearTimeout(undoTimer);
+  $("undo").hidden = true;
+  const id = await call("undo_delete");
+  if (id == null) return;
+  state = await invoke("get_state");
+  selectNudge(id);
+  $("nudge-select").focus();
 });
 
 $("nudge-enabled").addEventListener("change", (e) => saveNudge({ enabled: e.target.checked }));
