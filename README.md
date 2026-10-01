@@ -9,6 +9,10 @@ It is useful for the Pomodoro Technique and for remembering to get up from your
 desk from time to time.
 
 <p align="center">
+  <img src="ui-tests/overlay-2026-09-30.png" alt="A reminder on screen: the Card layout in the Ocean style, reading Time to step away, with a break idea, Snooze and Done buttons and a 20 second countdown ring" width="720">
+</p>
+
+<p align="center">
   <img src="ui-tests/settings-reminder-2026-09-30.png" alt="The Settings window on the Reminder page, with a live preview of a Ring layout reminder in the Forest style" width="720">
 </p>
 

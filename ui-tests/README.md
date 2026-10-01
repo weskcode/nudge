@@ -3,7 +3,7 @@
 ## 2026-09-30, 1.0.1 icon
 
 Captured on macOS 27, dark appearance, Retina (2x), with
-`screencapture -l <window id>`. The README shows the first three.
+`screencapture -l <window id>`. The README shows the overlay and the first three.
 
 - `settings-reminder-2026-09-30.png` and `settings-schedule-2026-09-30.png`:
   the Settings window with the linocut bell in the sidebar. A debug build of
@@ -15,6 +15,11 @@ Captured on macOS 27, dark appearance, Retina (2x), with
 - `about-2026-09-30.png`: the About panel of the installed, notarized 1.0.1
   (`89b5bb8`). The unbundled debug build has no app icon, so its About panel
   shows a folder. macOS draws the gray plate around the icon.
+- `overlay-2026-09-30.png`: the reminder as it appears when a nudge goes
+  off, from the same debug build: Card layout, Ocean style, a break idea and
+  a 20 second break. Started with Take a Break Now from the menu; it closed
+  on its own. Ocean was used because Frosted blurs the real desktop behind
+  it. Scaled from 2940 to 2000 px wide.
 
 ## 2026-09-27, multiple nudges
 
