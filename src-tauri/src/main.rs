@@ -587,12 +587,16 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
                     unsafe {
                         use objc::{msg_send, sel, sel_impl};
                         use cocoa::base::id;
-                        let ns_window: id = window.ns_window().unwrap() as id;
-                        const NS_MAIN_MENU_WINDOW_LEVEL: i64 = 24;
-                        let _: () = msg_send![ns_window, setLevel: NS_MAIN_MENU_WINDOW_LEVEL];
-                        let behavior: u64 = msg_send![ns_window, collectionBehavior];
-                        let combined = behavior | 1 << 0 | 1 << 8;
-                        let _: () = msg_send![ns_window, setCollectionBehavior: combined];
+                        // without a native window the reminder still shows, just
+                        // not above fullscreen apps; no reason to crash over it
+                        if let Ok(ns_window) = window.ns_window() {
+                            let ns_window = ns_window as id;
+                            const NS_MAIN_MENU_WINDOW_LEVEL: i64 = 24;
+                            let _: () = msg_send![ns_window, setLevel: NS_MAIN_MENU_WINDOW_LEVEL];
+                            let behavior: u64 = msg_send![ns_window, collectionBehavior];
+                            let combined = behavior | 1 << 0 | 1 << 8;
+                            let _: () = msg_send![ns_window, setCollectionBehavior: combined];
+                        }
                     }
                 }
                 opened.push(label);
