@@ -195,16 +195,6 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-#overlay-stats {
-  position: absolute;
-  bottom: clamp(1.25rem, 4vmin, 2.5rem);
-  left: 0;
-  right: 0;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.65);
-  font-variant-numeric: tabular-nums;
-}
-
 @media (prefers-reduced-motion: reduce) {
   #overlay, .leaving #overlay, .reminder, .leaving .reminder { animation: none; }
   .pill { transition: none; }
@@ -625,7 +615,6 @@ button {
 .pv-pills span { font-size: 1.9cqi; font-weight: 500; padding: 0.8cqi 2.6cqi; border-radius: 999px; }
 .pv-snooze { background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.1)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4); }
 .pv-done { background: #fff; color: #111; }
-.pv-stats { position: absolute; left: 0; right: 0; bottom: 2.6cqi; font-size: 1.7cqi; text-align: center; opacity: 0.5; }
 
 .styles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 12px; }
 .styles label { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11px; color: var(--label); }

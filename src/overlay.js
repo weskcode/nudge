@@ -20,7 +20,6 @@ const BREAK_IDEAS = [
 ];
 
 const isMac = navigator.userAgent.includes("Mac");
-const device = isMac ? "Mac" : "computer";
 let snoozeMins = 5;
 
 // keys and clicks already in flight when the reminder opened were meant for
@@ -89,12 +88,6 @@ listen("nudge://overlay", (event) => renderAlso(event.payload.also))
 
     // SVG elements have no .hidden property; the ring layout always shows the ring
     if (s.auto_dismiss_secs > 0 || s.layout === "ring") document.querySelector(".ring").removeAttribute("hidden");
-
-    if (s.show_counts) {
-      $("overlay-stats").textContent =
-        `${s.count_session} since your ${device} woke  ·  ${s.count_total} total`;
-      $("overlay-stats").hidden = false;
-    }
 
     // give VoiceOver and the keyboard a control to start from; Enter and Space on
     // a button are already kept out of press-any-key

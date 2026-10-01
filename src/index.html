@@ -16,7 +16,6 @@
     <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
     <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9.5 17.5h5M10.5 20.5h3M12 3a6 6 0 0 0-3.5 10.9V15.5h7v-1.6A6 6 0 0 0 12 3z"/></symbol>
     <symbol id="i-textsize" viewBox="0 0 24 24"><path d="M3.5 18 8 6l4.5 12M5.2 14h5.6M14.5 18v-4.5a2.75 2.75 0 0 1 5.5 0V18M14.5 15.5H20"/></symbol>
-    <symbol id="i-counter" viewBox="0 0 24 24"><path d="M5 19v-8M10 19V5M15 19v-6M20 19V8"/></symbol>
     <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
     <symbol id="i-hourglass" viewBox="0 0 24 24"><path d="M7 3.5h10M7 20.5h10M8 3.5c0 5 8 5.5 8 8.5s-8 3.5-8 8.5M16 3.5c0 5-8 5.5-8 8.5s8 3.5 8 8.5"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/></symbol>
@@ -131,7 +130,6 @@
                 <span class="pv-idea" id="pv-idea"></span>
                 <span class="pv-pills"><span class="pv-snooze" id="pv-snooze">Snooze</span><span class="pv-done">Done</span></span>
               </div>
-              <span class="pv-stats" id="pv-stats"></span>
             </div>
             <div class="styles" role="radiogroup" aria-label="Style" id="style">
               <label><input type="radio" name="style" value="frosted" /><i class="thumb sw-frosted"></i><span>Frosted</span></label>
@@ -182,11 +180,6 @@
                 <label><input type="radio" name="text-size" value="large" /><span>Large</span></label>
                 <label><input type="radio" name="text-size" value="xlarge" /><span>Extra Large</span></label>
               </div>
-            </div>
-            <div class="row">
-              <span class="tile t-pink"><svg><use href="#i-counter"/></svg></span>
-              <label class="text" for="show-counts">Show reminder count</label>
-              <input id="show-counts" type="checkbox" switch />
             </div>
             <div class="row">
               <span class="tile t-gray"><svg><use href="#i-eye"/></svg></span>
@@ -281,11 +274,6 @@
               <span class="tile t-gray"><svg><use href="#i-login"/></svg></span>
               <label class="text" for="launch-at-login">Open at login</label>
               <input id="launch-at-login" type="checkbox" switch />
-            </div>
-            <div class="row">
-              <span class="tile t-pink"><svg><use href="#i-counter"/></svg></span>
-              <span class="text"><span id="count-total">0 reminders</span><small id="count-session"></small></span>
-              <button id="reset-counters" type="button">Reset</button>
             </div>
           </div>
 

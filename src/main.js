@@ -160,8 +160,6 @@ function renderPreview(n, message = n.message) {
   $("pv-idea").textContent = BREAK_IDEAS[ideaIndex];
   $("pv-snooze").hidden = n.snooze_mins === 0;
   $("pv-snooze").textContent = `Snooze ${n.snooze_mins} min`;
-  $("pv-stats").hidden = !n.show_counts;
-  $("pv-stats").textContent = `${state.count_session} since your ${device} woke  ·  ${state.count_total} total`;
   if (before && before !== preview.className) replayPreview();
 }
 
@@ -249,7 +247,6 @@ function render(s) {
   setRadio("style", n.style);
   setRadio("text-size", n.text_size);
   setRadio("layout", n.layout);
-  $("show-counts").checked = n.show_counts;
 
   setSelect($("auto-dismiss"), n.auto_dismiss_secs, (v) => `${v} seconds`);
   setSelect($("snooze"), n.snooze_mins, (v) => plural(v, "minute"));
@@ -260,9 +257,6 @@ function render(s) {
   $("enabled-on-wake").checked = s.enabled_on_wake;
   $("reset-on-wake").checked = s.reset_on_wake;
   $("launch-at-login").checked = s.launch_at_login;
-
-  $("count-total").textContent = `${plural(s.count_total, "reminder")} so far`;
-  $("count-session").textContent = `${s.count_session} since your ${device} last woke`;
 
   renderPreview(n, document.activeElement === $("message") ? $("message").value.trim() : n.message);
   renderStatus();
@@ -437,7 +431,6 @@ document.querySelectorAll('input[name="text-size"]').forEach((input) =>
 document.querySelectorAll('input[name="layout"]').forEach((input) =>
   input.addEventListener("change", () => saveNudge({ layout: input.value })),
 );
-$("show-counts").addEventListener("change", (e) => saveNudge({ showCounts: e.target.checked }));
 $("preview").addEventListener("click", () => invoke("preview_reminder", { id: current().id }));
 
 $("auto-dismiss").addEventListener("change", (e) => saveNudge({ autoDismissSecs: Number(e.target.value) }));
@@ -457,7 +450,6 @@ $("enabled-on-wake").addEventListener("change", (e) => save({ enabledOnWake: e.t
 $("reset-on-wake").addEventListener("change", (e) => save({ resetOnWake: e.target.checked }));
 $("launch-at-login").addEventListener("change", (e) => save({ launchAtLogin: e.target.checked }));
 
-$("reset-counters").addEventListener("click", () => invoke("reset_counters"));
 
 $("credits").addEventListener("click", (e) => {
   e.preventDefault();

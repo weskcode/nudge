@@ -34,6 +34,7 @@ struct Nudge {
     break_ideas: bool,
     style: String,
     text_size: String,
+    // no longer shown anywhere; still saved because 0.2.0 needs it to read the file
     show_counts: bool,
     sound: String,
     snooze_mins: u32,
@@ -110,8 +111,6 @@ struct PublicState {
     reset_on_wake: bool,
     launch_at_login: bool,
     menu_bar_timer: String,
-    count_total: u32,
-    count_session: u32,
     enabled: bool,
     showing: bool,
     nudges: Vec<NudgeState>,
@@ -131,8 +130,8 @@ struct OverlayState {
     #[serde(flatten)]
     look: Nudge,
     also: Vec<AlsoNow>,
+    // picks the break idea, so each reminder gets the next one
     count_total: u32,
-    count_session: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -146,7 +145,6 @@ struct App {
     // take after config, and never hold across a window, menu or tray call:
     // those run on the main thread, where the overlay focus handler takes it
     schedule: Mutex<Schedule>,
-    count_session: Mutex<u32>,
     menu: Mutex<Option<Menu<Wry>>>,
     countdown_items: Mutex<Vec<MenuItem<Wry>>>,
     toggle_item: Mutex<Option<MenuItem<Wry>>>,
@@ -264,7 +262,6 @@ fn enabled_timers(nudges: &[Nudge]) -> Vec<(u32, Duration)> {
 fn snapshot(app: &AppHandle) -> PublicState {
     let state = app.state::<App>();
     let config = state.config.lock().unwrap().clone();
-    let count_session = *state.count_session.lock().unwrap();
     let schedule = state.schedule.lock().unwrap();
     let now = Instant::now();
     PublicState {
@@ -280,8 +277,6 @@ fn snapshot(app: &AppHandle) -> PublicState {
         reset_on_wake: config.reset_on_wake,
         launch_at_login: config.launch_at_login,
         menu_bar_timer: config.menu_bar_timer,
-        count_total: config.count_total,
-        count_session,
         enabled: schedule.on,
         showing: schedule.showing.is_some(),
     }
@@ -290,7 +285,6 @@ fn snapshot(app: &AppHandle) -> PublicState {
 fn overlay_state(app: &AppHandle) -> OverlayState {
     let state = app.state::<App>();
     let config = state.config.lock().unwrap().clone();
-    let count_session = *state.count_session.lock().unwrap();
     let (look, due) = state
         .schedule
         .lock()
@@ -314,7 +308,6 @@ fn overlay_state(app: &AppHandle) -> OverlayState {
         look: find(look).or(config.nudges.first()).cloned().unwrap_or_default(),
         also,
         count_total: config.count_total,
-        count_session,
     }
 }
 
@@ -541,7 +534,6 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
     // count only reminders that actually appeared
     if counted {
         state.config.lock().unwrap().count_total += 1;
-        *state.count_session.lock().unwrap() += 1;
         save_config(app);
     }
 
@@ -663,8 +655,6 @@ fn on_wake_main(app: &AppHandle) {
         let config = state.config.lock().unwrap();
         (config.enabled_on_wake, config.reset_on_wake)
     };
-
-    *state.count_session.lock().unwrap() = 0;
 
     finish_overlay(app, None);
     let on = is_on(app);
@@ -980,7 +970,6 @@ fn set_nudge(
     break_ideas: Option<bool>,
     style: Option<String>,
     text_size: Option<String>,
-    show_counts: Option<bool>,
     sound: Option<String>,
     snooze_mins: Option<u32>,
     layout: Option<String>,
@@ -1022,9 +1011,6 @@ fn set_nudge(
         }
         if let Some(value) = break_ideas {
             nudge.break_ideas = value;
-        }
-        if let Some(value) = show_counts {
-            nudge.show_counts = value;
         }
         if let Some(value) = style.filter(|v| STYLES.contains(&v.as_str())) {
             nudge.style = value;
@@ -1121,15 +1107,6 @@ fn set_enabled(app: AppHandle, enabled: bool) {
     if enabled != is_on(&app) {
         set_reminders(&app, enabled);
     }
-}
-
-#[tauri::command]
-fn reset_counters(app: AppHandle) {
-    let state = app.state::<App>();
-    state.config.lock().unwrap().count_total = 0;
-    *state.count_session.lock().unwrap() = 0;
-    save_config(&app);
-    broadcast(&app);
 }
 
 const ABOUT_CREDITS: &str =
@@ -1229,7 +1206,6 @@ fn main() {
         .manage(App {
             config: Mutex::new(Config::default()),
             schedule: Mutex::new(Schedule::new()),
-            count_session: Mutex::new(0),
             menu: Mutex::new(None),
             countdown_items: Mutex::new(Vec::new()),
             toggle_item: Mutex::new(None),
@@ -1249,7 +1225,6 @@ fn main() {
             set_enabled,
             preview_reminder,
             preview_sound,
-            reset_counters,
             open_settings,
             open_credits
         ])
@@ -1618,8 +1593,6 @@ mod tests {
             reset_on_wake: true,
             launch_at_login: false,
             menu_bar_timer: "never".into(),
-            count_total: 5,
-            count_session: 3,
             enabled: true,
             showing: false,
             nudges: vec![NudgeState {
@@ -1630,7 +1603,7 @@ mod tests {
         let json = serde_json::to_value(state).unwrap();
         for key in [
             "enabled_on_wake", "reset_on_wake", "launch_at_login", "menu_bar_timer",
-            "count_total", "count_session", "enabled", "showing",
+            "enabled", "showing",
         ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }
@@ -1653,12 +1626,11 @@ mod tests {
                 symbol: "drop".into(),
             }],
             count_total: 7,
-            count_session: 2,
         };
         let json = serde_json::to_value(state).unwrap();
         for key in [
             "message", "symbol", "style", "layout", "text_size", "break_ideas", "snooze_mins",
-            "auto_dismiss_secs", "show_counts", "count_total", "count_session",
+            "auto_dismiss_secs", "count_total",
         ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }
