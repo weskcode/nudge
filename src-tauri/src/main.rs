@@ -1673,8 +1673,7 @@ mod tests {
 
     #[test]
     fn an_undone_delete_puts_the_nudge_back_where_it_was() {
-        let mut config = Config::default();
-        config.nudges = (1..=3).map(|id| Nudge { id, ..Nudge::default() }).collect();
+        let mut config = Config { nudges: (1..=3).map(|id| Nudge { id, ..Nudge::default() }).collect(), ..Config::default() };
         let gone = config.nudges.remove(1);
         assert_eq!(restore_nudge(&mut config, gone.clone(), 1), Some(2));
         assert_eq!(config.nudges.iter().map(|n| n.id).collect::<Vec<_>>(), vec![1, 2, 3]);
@@ -1683,8 +1682,7 @@ mod tests {
 
     #[test]
     fn an_undone_delete_takes_a_fresh_id_if_its_own_was_reused() {
-        let mut config = Config::default();
-        config.nudges = vec![Nudge { id: 1, ..Nudge::default() }, Nudge { id: 2, ..Nudge::default() }];
+        let mut config = Config { nudges: vec![Nudge { id: 1, ..Nudge::default() }, Nudge { id: 2, ..Nudge::default() }], ..Config::default() };
         let gone = Nudge { id: 2, message: "water".into(), ..Nudge::default() };
         assert_eq!(restore_nudge(&mut config, gone, 9), Some(3), "id 2 is taken; it goes at the end");
         assert_eq!(config.nudges[2].message, "water");
@@ -1693,8 +1691,7 @@ mod tests {
     #[test]
     fn undo_turns_back_off_the_nudge_the_delete_switched_on() {
         // A and B, B off; deleting A left B alone, so it was switched on
-        let mut config = Config::default();
-        config.nudges = vec![Nudge { id: 2, enabled: true, ..Nudge::default() }];
+        let mut config = Config { nudges: vec![Nudge { id: 2, enabled: true, ..Nudge::default() }], ..Config::default() };
         let a = Nudge { id: 1, interval_secs: 600, ..Nudge::default() };
         let deleted = Deleted { nudge: a, index: 0, forced_on: Some(2) };
         let (id, timer, off) = undo_into(&mut config, deleted).unwrap();
@@ -1704,8 +1701,7 @@ mod tests {
 
     #[test]
     fn an_undone_delete_respects_the_limit() {
-        let mut config = Config::default();
-        config.nudges = (1..=MAX_NUDGES as u32).map(|id| Nudge { id, ..Nudge::default() }).collect();
+        let mut config = Config { nudges: (1..=MAX_NUDGES as u32).map(|id| Nudge { id, ..Nudge::default() }).collect(), ..Config::default() };
         assert_eq!(restore_nudge(&mut config, Nudge { id: 99, ..Nudge::default() }, 0), None);
         assert_eq!(config.nudges.len(), MAX_NUDGES);
     }
@@ -1770,8 +1766,7 @@ mod tests {
 
     #[test]
     fn saved_config_loads_back_unchanged() {
-        let mut config = Config::default();
-        config.count_total = 9;
+        let mut config = Config { count_total: 9, ..Config::default() };
         config.menu_bar_timer = "last5".into();
         config.nudges.push(Nudge {
             id: 4,
@@ -1881,8 +1876,7 @@ mod tests {
 
     #[test]
     fn older_builds_still_read_the_first_nudge() {
-        let mut config = Config::default();
-        config.count_total = 63;
+        let mut config = Config { count_total: 63, ..Config::default() };
         config.nudges[0] = Nudge {
             message: "stretch".into(),
             interval_secs: 2700,
