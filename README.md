@@ -1,22 +1,31 @@
 # nudge
 
-`nudge` is a free, open source, cross-platform status bar app that displays firm
-but gentle periodic reminders. It runs on macOS, Windows and Linux, sits quietly
-in your system tray, and periodically covers every screen with a friendly fullscreen reminder until
-you dismiss it with a click or any key.
+`nudge` is a free menu bar app that displays firm but gentle reminders. It
+runs on macOS, Windows and Linux, sits in your menu bar or system tray, and on
+a timer covers every screen with a fullscreen reminder until you dismiss it
+with a click or any key.
 
 It is useful for the Pomodoro Technique and for remembering to get up from your
 desk from time to time.
+
+<p align="center">
+  <img src="ui-tests/settings-reminder-2026-09-30.png" alt="The Settings window on the Reminder page, with a live preview of a Ring layout reminder in the Forest style" width="720">
+</p>
+
+<p align="center">
+  <img src="ui-tests/tray-2026-09-30.png" alt="The menu bar menu with a countdown line for each of three nudges" width="260">
+  <img src="ui-tests/settings-schedule-2026-09-30.png" alt="The Settings window on the Schedule page, counting down to the next reminder" width="460">
+</p>
 
 ## Credits
 
 `nudge` is inspired by and modeled on
 [remindful](https://github.com/brettferdosi/remindful) by
 [Brett Gutstein](https://brett.gutste.in), a macOS app that did it first.
-Thank you for the idea and the design. `nudge` was written from scratch in Rust
-and trades AppleScript-era Objective-C for a lean cross-platform core, but the
-product behavior, the tray toggle, the countdown menu and the full-screen
-reminder pattern all come from `remindful`.
+Thank you for the idea and the design. `remindful` is a Swift app for macOS;
+`nudge` was written from scratch in Rust with Tauri so it also runs on Windows
+and Linux. The product behavior, the tray toggle, the countdown menu and the
+full-screen reminder pattern all come from `remindful`.
 
 ## Features
 
@@ -32,7 +41,9 @@ reminder pattern all come from `remindful`.
   adds or deletes nudges. The menu shows a countdown line for each, and nudges
   that come due within a minute of each other share one reminder, with the
   others listed under "Also now"
-- Settings persist between runs and follow light and dark mode
+- Settings persist between runs and follow light and dark mode. They are
+  saved to `config.json` in the `nudge` folder of your user config
+  directory (`~/Library/Application Support/nudge/` on macOS)
 
 ### Make it yours
 
@@ -42,8 +53,8 @@ matters most if you have ADHD or tend to hyperfocus:
 - A symbol for each nudge: walking figure, water drop, eye, breath, pill or
   bell
 - Your own message, plus an optional break idea that changes every time
-  ("Refill your water", "Jot down where you left off") so the reminder does
-  not fade into the background
+  (refill your water, jot down where you left off) so the reminder does not
+  fade into the background
 - Five reminder styles (Frosted, Dusk, Ocean, Forest, Midnight) and three text
   sizes, with a Preview button
 - Three reminder layouts: Classic (text on the backdrop), Card (a glass panel)
@@ -74,6 +85,14 @@ npm run install:app   # build a release bundle and install/relaunch /Application
 certificate in your keychain (override with `APPLE_SIGNING_IDENTITY`). A
 stable signature lets macOS remember the Input Monitoring permission across
 updates. Without a certificate the app is ad-hoc signed.
+
+## Permissions (macOS)
+
+To close the reminder with any key while another app is frontmost, Nudge
+needs Input Monitoring (System Settings > Privacy & Security > Input
+Monitoring). Without it, the reminder still closes with a click, the Done
+button, or a key typed while the reminder has focus. Open at login installs a
+LaunchAgent in `~/Library/LaunchAgents`.
 
 ## Platform notes
 

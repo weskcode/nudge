@@ -1,5 +1,21 @@
 # UI snapshots (point-in-time reference)
 
+## 2026-09-30, 1.0.1 icon
+
+Captured on macOS 27, dark appearance, Retina (2x), with
+`screencapture -l <window id>`. The README shows the first three.
+
+- `settings-reminder-2026-09-30.png` and `settings-schedule-2026-09-30.png`:
+  the Settings window with the linocut bell in the sidebar. A debug build of
+  `bdff69f` ran with `HOME` pointed at a temp folder holding three sample
+  nudges, so the installed app and its settings were left alone. Pages were
+  switched with AX press actions.
+- `tray-2026-09-30.png`: the menu bar menu from the same build, one countdown
+  line per nudge.
+- `about-2026-09-30.png`: the About panel of the installed, notarized 1.0.1
+  (`89b5bb8`). The unbundled debug build has no app icon, so its About panel
+  shows a folder. macOS draws the gray plate around the icon.
+
 ## 2026-09-27, multiple nudges
 
 Captured from a debug build of the working tree (after `e341c43`, before
@@ -26,7 +42,8 @@ Captured from the signed release build on macOS 27, Retina (2x), with
 `screencapture -l <window id>`.
 
 - `settings-2026-09-27.png`: the redesigned Settings window (780x580
-  logical), a System Settings–style sidebar over the native window material,
+  logical), a sidebar styled like System Settings over the native window
+  material,
   showing the Reminder page with its live preview, style swatches and the
   Classic / Card / Ring layout picker (0.2.0, `e341c43`, light appearance,
   Card selected).
@@ -43,9 +60,9 @@ at that time (auto-dismiss + interval floor + settings-persistence batch,
 `bdd12dd` and later). Commit new screenshots next to these whenever the
 UI intentionally changes, named `<surface>-<YYYY-MM-DD>.png`.
 
-- `overlay-current.png` — the fullscreen reminder over a real desktop
+- `overlay-current.png`: the fullscreen reminder over a real desktop
   (Retina capture, 2x), message + snooze pill + dismiss hint + counters.
-- `settings-current.png` — replica of the Settings window at its true
+- `settings-current.png`: replica of the Settings window at its true
   440x500 logical content size (same HTML/CSS/JS as `index.html`; the
   real window differs only by native window chrome (title bar), which
   adds ~28px above this region).
@@ -54,5 +71,5 @@ How the settings replica was produced: NSStatusItem menus are not
 exposed to the accessibility bridge on modern macOS, so the tray menu
 could not be clicked programmatically. `index.html`/`styles.css`/
 `main.js` were served directly with a `window.__TAURI__` stub returning
-the current state shape — same files the app loads, same CSS, same JS
-render path.
+the current state shape, so the page used the same files, CSS and JS
+render path as the app.
