@@ -23,4 +23,6 @@ Fixes go into the latest release only.
 - On macOS, with Input Monitoring allowed, it is told the key code of each
   key press so that any key can close a reminder. It ignores key presses
   while no reminder is showing and never records, stores or sends them.
-- Open at login adds a LaunchAgent in `~/Library/LaunchAgents`.
+- Open at login adds a LaunchAgent in `~/Library/LaunchAgents` on macOS, a
+  Run entry in the registry on Windows, and an entry in `~/.config/autostart`
+  on Linux.
