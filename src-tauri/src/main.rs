@@ -159,8 +159,15 @@ struct App {
     pause_menu: Mutex<Option<Submenu<Wry>>>,
     last_label: Mutex<String>,
     problems: Mutex<Problems>,
-    // the last nudge deleted and where it stood, for Undo
-    deleted: Mutex<Option<(Nudge, usize)>>,
+    // the last nudge deleted, for Undo
+    deleted: Mutex<Option<Deleted>>,
+}
+
+struct Deleted {
+    nudge: Nudge,
+    index: usize,
+    // the nudge turned on because it was left alone, which Undo turns back off
+    forced_on: Option<u32>,
 }
 
 // what last failed; each clears when the same kind of change next succeeds
@@ -767,7 +774,8 @@ fn on_wake_main(app: &AppHandle, slept: Duration) {
         let timers = enabled_timers(&nudges(app));
         state.schedule.lock().unwrap().after_wake(&timers, Instant::now(), slept);
     } else if on {
-        state.schedule.lock().unwrap().shorten_pause(slept, Instant::now());
+        let timers = enabled_timers(&nudges(app));
+        state.schedule.lock().unwrap().shorten_pause(&timers, slept, Instant::now());
     }
     refresh_tray(app);
     broadcast(app);
@@ -1191,16 +1199,17 @@ fn delete_nudge(app: AppHandle, id: u32) {
             return;
         }
         let index = config.nudges.iter().position(|n| n.id == id).unwrap_or(0);
-        let gone = config.nudges.remove(index);
-        *state.deleted.lock().unwrap() = Some((gone, index));
+        let nudge = config.nudges.remove(index);
         // a lone nudge has no switch of its own, so it can't be left off
-        match config.nudges.as_mut_slice() {
+        let survivor = match config.nudges.as_mut_slice() {
             [only] if !only.enabled => {
                 only.enabled = true;
                 Some((only.id, Duration::from_secs(only.interval_secs as u64)))
             }
             _ => None,
-        }
+        };
+        *state.deleted.lock().unwrap() = Some(Deleted { nudge, index, forced_on: survivor.map(|(id, _)| id) });
+        survivor
     };
     save_config(&app);
     {
@@ -1231,16 +1240,42 @@ fn restore_nudge(config: &mut Config, mut nudge: Nudge, index: usize) -> Option<
     Some(id)
 }
 
-// Undo after Delete: the nudge comes back with its settings and a fresh timer
+// the config side of Undo: the nudge back in place, the nudge the delete
+// switched on off again; returns the restored id, its timer if it is on, and
+// the nudge switched back off
+fn undo_into(config: &mut Config, deleted: Deleted) -> Option<(u32, Option<Duration>, Option<u32>)> {
+    let Deleted { nudge, index, forced_on } = deleted;
+    let timer = nudge.enabled.then(|| Duration::from_secs(nudge.interval_secs as u64));
+    let id = restore_nudge(config, nudge, index)?;
+    let forced_on = forced_on.filter(|&other| {
+        config.nudges.iter_mut().find(|n| n.id == other).map(|n| n.enabled = false).is_some()
+    });
+    Some((id, timer, forced_on))
+}
+
+// Undo after Delete: the nudge comes back with its settings and a fresh timer,
+// and a nudge the delete switched on goes back off. at the limit nothing
+// changes and Undo stays available
 #[tauri::command]
 fn undo_delete(app: AppHandle) -> Option<u32> {
     let state = app.state::<App>();
-    let (nudge, index) = state.deleted.lock().unwrap().take()?;
-    let timer = nudge.enabled.then(|| Duration::from_secs(nudge.interval_secs as u64));
-    let id = restore_nudge(&mut state.config.lock().unwrap(), nudge, index)?;
+    let (id, timer, forced_on) = {
+        let mut config = state.config.lock().unwrap();
+        let mut deleted = state.deleted.lock().unwrap();
+        if config.nudges.len() >= MAX_NUDGES {
+            return None;
+        }
+        undo_into(&mut config, deleted.take()?)?
+    };
     save_config(&app);
-    if let Some(after) = timer {
-        state.schedule.lock().unwrap().resume(&[(id, after)], Instant::now());
+    {
+        let mut schedule = state.schedule.lock().unwrap();
+        if let Some(after) = timer {
+            schedule.resume(&[(id, after)], Instant::now());
+        }
+        if let Some(other) = forced_on {
+            schedule.next.remove(&other);
+        }
     }
     refresh_tray(&app);
     broadcast(&app);
@@ -1535,7 +1570,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        chime_path, config_json, hms, load_from, restore_nudge, Problems, new_id, parse_config, replace_file, AlsoNow,
+        chime_path, config_json, hms, load_from, restore_nudge, undo_into, Deleted, Problems, new_id, parse_config, replace_file, AlsoNow,
         Config, Nudge, NudgeState, OverlayState, PublicState, MAX_NUDGES,
     };
     use serde::Deserialize;
@@ -1643,6 +1678,18 @@ mod tests {
         let gone = Nudge { id: 2, message: "water".into(), ..Nudge::default() };
         assert_eq!(restore_nudge(&mut config, gone, 9), Some(3), "id 2 is taken; it goes at the end");
         assert_eq!(config.nudges[2].message, "water");
+    }
+
+    #[test]
+    fn undo_turns_back_off_the_nudge_the_delete_switched_on() {
+        // A and B, B off; deleting A left B alone, so it was switched on
+        let mut config = Config::default();
+        config.nudges = vec![Nudge { id: 2, enabled: true, ..Nudge::default() }];
+        let a = Nudge { id: 1, interval_secs: 600, ..Nudge::default() };
+        let deleted = Deleted { nudge: a, index: 0, forced_on: Some(2) };
+        let (id, timer, off) = undo_into(&mut config, deleted).unwrap();
+        assert_eq!((id, timer, off), (1, Some(std::time::Duration::from_secs(600)), Some(2)));
+        assert!(config.nudges[0].enabled && !config.nudges[1].enabled);
     }
 
     #[test]

@@ -128,15 +128,17 @@ impl Schedule {
     }
 
     // after a wake that keeps the timers, a pause still loses the time asleep;
-    // nudges it was holding back move with it
-    pub fn shorten_pause(&mut self, slept: Duration, now: Instant) {
+    // nudges it was holding back move with it, and if it ran out while the Mac
+    // slept they start a full interval from now, as when a pause is ended
+    pub fn shorten_pause(&mut self, timers: &[(u32, Duration)], slept: Duration, now: Instant) {
         let Some(old) = self.paused_until else {
             return;
         };
         let until = old.checked_sub(slept).filter(|&until| until > now);
-        for at in self.next.values_mut() {
+        for (id, at) in self.next.iter_mut() {
             if *at == old {
-                *at = until.unwrap_or(now);
+                let full = timers.iter().find(|(t, _)| t == id).map_or(now, |&(_, after)| now + after);
+                *at = until.unwrap_or(full);
             }
         }
         self.paused_until = until;
@@ -511,7 +513,8 @@ mod tests {
         let hour = MIN * 60;
         let mut schedule = on_with(now, &[(1, 600), (2, 4 * 3600)]);
         schedule.pause(&[1, 2], now + hour * 2);
-        schedule.shorten_pause(hour, now);
+        let timers = [(1, Duration::from_secs(600)), (2, Duration::from_secs(4 * 3600))];
+        schedule.shorten_pause(&timers, hour, now);
         assert_eq!(schedule.remaining(1, now), 3600, "held to the pause, which now ends in an hour");
         assert_eq!(schedule.remaining(2, now), 4 * 3600, "due after the pause anyway: untouched");
     }
@@ -522,5 +525,14 @@ mod tests {
         let mut schedule = on_with(now, &[(1, 30)]);
         schedule.after_wake(&[(1, Duration::from_secs(600))], now, MIN * 60);
         assert_eq!(schedule.remaining(1, now), 600);
+    }
+
+    #[test]
+    fn a_pause_that_ran_out_asleep_does_not_greet_the_wake_with_a_reminder() {
+        let now = Instant::now();
+        let mut schedule = on_with(now, &[(1, 600)]);
+        schedule.pause(&[1], now + MIN * 30);
+        schedule.shorten_pause(&[(1, Duration::from_secs(600))], MIN * 60, now);
+        assert_eq!(schedule.remaining(1, now), 600, "a full interval, not due at once");
     }
 }
