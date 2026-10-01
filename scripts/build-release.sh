@@ -23,7 +23,8 @@ cd "$BUILD"
 
 # cargo is not always on PATH in this environment; fall back to rustup's stable toolchain
 if ! command -v cargo >/dev/null 2>&1; then
-  TOOLCHAIN="${HOME}/.rustup/toolchains/stable-$(uname -m)-apple-darwin/bin"
+  # uname says arm64, rustup says aarch64
+  TOOLCHAIN="${HOME}/.rustup/toolchains/stable-$(uname -m | sed 's/arm64/aarch64/')-apple-darwin/bin"
   if [ -d "$TOOLCHAIN" ]; then
     export PATH="$TOOLCHAIN:$PATH"
   else
