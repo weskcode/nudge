@@ -62,7 +62,9 @@ impl Default for Nudge {
     }
 }
 
+// any field a file lacks takes its default, so a partial file still loads
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
 struct Config {
     enabled_on_wake: bool,
     reset_on_wake: bool,
@@ -81,6 +83,9 @@ const MENU_BAR_TIMERS: &[&str] = &["never", "last5", "always"];
 const LAYOUTS: &[&str] = &["classic", "card", "ring"];
 const SYMBOLS: &[&str] = &["figure", "drop", "eye", "breath", "pill", "bell"];
 const MAX_NUDGES: usize = 8;
+// the shortest and longest gap between reminders that Settings offers
+const MIN_INTERVAL_SECS: u32 = 5 * 60;
+const MAX_INTERVAL_SECS: u32 = 8 * 60 * 60;
 
 // a nudge due this soon comes along with a reminder that is opening, rather
 // than following it a minute later
@@ -191,7 +196,32 @@ fn parse_config(text: &str) -> Option<Config> {
     if let [only] = config.nudges.as_mut_slice() {
         only.enabled = true;
     }
+    sanitize(&mut config);
     Some(config)
+}
+
+// hold a loaded file to the same limits Settings enforces; a hand-edited
+// interval of 0, say, would reopen the reminder on every tick
+fn sanitize(config: &mut Config) {
+    config.nudges.truncate(MAX_NUDGES);
+    keep_if_known(&mut config.menu_bar_timer, MENU_BAR_TIMERS, default_menu_bar_timer());
+    let defaults = Nudge::default();
+    for nudge in &mut config.nudges {
+        nudge.interval_secs = nudge.interval_secs.clamp(MIN_INTERVAL_SECS, MAX_INTERVAL_SECS);
+        nudge.auto_dismiss_secs = nudge.auto_dismiss_secs.min(600);
+        nudge.snooze_mins = nudge.snooze_mins.min(30);
+        keep_if_known(&mut nudge.style, STYLES, defaults.style.clone());
+        keep_if_known(&mut nudge.layout, LAYOUTS, defaults.layout.clone());
+        keep_if_known(&mut nudge.symbol, SYMBOLS, defaults.symbol.clone());
+        keep_if_known(&mut nudge.text_size, TEXT_SIZES, defaults.text_size.clone());
+        keep_if_known(&mut nudge.sound, SOUNDS, defaults.sound.clone());
+    }
+}
+
+fn keep_if_known(value: &mut String, known: &[&str], fallback: String) {
+    if !known.contains(&value.as_str()) {
+        *value = fallback;
+    }
 }
 
 // one above the highest id, or the lowest free id when that would pass
@@ -220,10 +250,27 @@ fn config_json(config: &Config) -> serde_json::Value {
 }
 
 fn load_config() -> Config {
-    fs::read_to_string(config_path())
-        .ok()
-        .and_then(|text| parse_config(&text))
-        .unwrap_or_default()
+    load_from(&config_path())
+}
+
+// a file that exists but can't be read (a bad hand edit, or one written by a
+// newer version) is moved aside rather than left for the next save to replace
+fn load_from(path: &std::path::Path) -> Config {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Config::default();
+    };
+    if let Some(config) = parse_config(&text) {
+        return config;
+    }
+    let stamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let kept = path.with_file_name(format!("config.json.bad-{stamp}"));
+    match fs::rename(path, &kept) {
+        Ok(()) => println!("settings could not be read; kept them as {}", kept.display()),
+        Err(error) => println!("settings could not be read or kept aside: {error:?}"),
+    }
+    Config::default()
 }
 
 fn save_config(app: &AppHandle) {
@@ -533,7 +580,9 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
 
     // count only reminders that actually appeared
     if counted {
-        state.config.lock().unwrap().count_total += 1;
+        let mut config = state.config.lock().unwrap();
+        config.count_total = config.count_total.saturating_add(1);
+        drop(config);
         save_config(app);
     }
 
@@ -985,7 +1034,7 @@ fn set_nudge(
         let mut start = false;
         let mut stop = false;
         if let Some(secs) = interval_secs.filter(|&secs| secs > 0) {
-            nudge.interval_secs = secs.max(5 * 60);
+            nudge.interval_secs = secs.clamp(MIN_INTERVAL_SECS, MAX_INTERVAL_SECS);
             // a new interval restarts the timer
             start = true;
         }
@@ -1385,10 +1434,72 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        chime_path, config_json, hms, new_id, parse_config, replace_file, AlsoNow, Config,
-        Nudge, NudgeState, OverlayState, PublicState,
+        chime_path, config_json, hms, load_from, new_id, parse_config, replace_file, AlsoNow,
+        Config, Nudge, NudgeState, OverlayState, PublicState, MAX_NUDGES,
     };
     use serde::Deserialize;
+
+    #[test]
+    fn values_from_the_file_are_held_to_what_settings_allows() {
+        // a hand-edited file: an interval of 0 would reopen the reminder on every tick
+        let text = r#"{"enabled_on_wake":true,"reset_on_wake":true,"launch_at_login":false,
+            "count_total":0,"menu_bar_timer":"sometimes","nudges":[{"id":1,"interval_secs":0,
+            "auto_dismiss_secs":99999,"snooze_mins":500,"style":"neon","layout":"spiral",
+            "symbol":"skull","text_size":"huge","sound":"klaxon"}]}"#;
+        let config = parse_config(text).unwrap();
+        let nudge = &config.nudges[0];
+        assert_eq!(nudge.interval_secs, 5 * 60);
+        assert_eq!(nudge.auto_dismiss_secs, 600);
+        assert_eq!(nudge.snooze_mins, 30);
+        let defaults = Nudge::default();
+        assert_eq!(nudge.style, defaults.style);
+        assert_eq!(nudge.layout, defaults.layout);
+        assert_eq!(nudge.symbol, defaults.symbol);
+        assert_eq!(nudge.text_size, defaults.text_size);
+        assert_eq!(nudge.sound, defaults.sound);
+        assert_eq!(config.menu_bar_timer, "never");
+
+        let long = r#"{"nudges":[{"id":1,"interval_secs":999999}]}"#;
+        assert_eq!(parse_config(long).unwrap().nudges[0].interval_secs, 8 * 60 * 60);
+    }
+
+    #[test]
+    fn a_file_with_too_many_nudges_keeps_the_first_eight() {
+        let nudges: Vec<String> = (1..=12).map(|id| format!(r#"{{"id":{id}}}"#)).collect();
+        let text = format!(r#"{{"nudges":[{}]}}"#, nudges.join(","));
+        let config = parse_config(&text).unwrap();
+        assert_eq!(config.nudges.len(), MAX_NUDGES);
+        assert_eq!(config.nudges.last().unwrap().id, 8);
+    }
+
+    #[test]
+    fn a_file_missing_top_level_fields_still_loads() {
+        let config = parse_config(r#"{"nudges":[{"id":4,"message":"water"}]}"#).unwrap();
+        assert_eq!(config.nudges[0].message, "water");
+        assert!(config.enabled_on_wake);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_kept_aside_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("nudge-load-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+
+        // no file yet: defaults, and nothing set aside
+        assert_eq!(load_from(&path), Config::default());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+
+        std::fs::write(&path, "{ not json").unwrap();
+        assert_eq!(load_from(&path), Config::default());
+        assert!(!path.exists(), "the unreadable file must be moved, so a save can't destroy it");
+        let kept: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].file_name().unwrap().to_string_lossy().starts_with("config.json.bad-"));
+        assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "{ not json");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn chime_goes_in_the_users_own_cache_folder() {
