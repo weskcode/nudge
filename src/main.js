@@ -54,8 +54,13 @@ function renderStatus() {
   const minutes = Math.round(nudge.interval_secs / 60);
   const deadline = deadlines.get(nudge.id);
   const left = secsUntil(deadline);
-  // the sidebar and the menu bar count down to whichever nudge is next
-  const next = secsUntil(deadlines.size ? Math.min(...deadlines.values()) : undefined);
+  // the sidebar and the menu bar count down to whichever nudge is next; with
+  // several, the sidebar says which one it is
+  const soonest = [...deadlines].reduce((a, b) => (a && a[1] <= b[1] ? a : b), null);
+  const next = secsUntil(soonest ? soonest[1] : undefined);
+  const nextName = soonest && state.nudges.length > 1
+    ? state.nudges.find((n) => n.id === soonest[0])?.message || "Untitled"
+    : null;
   let title, detail, label, time, info, fraction;
 
   if (state.showing) {
@@ -63,7 +68,7 @@ function renderStatus() {
     detail = "Dismiss it to continue";
   } else if (state.enabled && next !== null) {
     title = "Reminders On";
-    detail = `Next in ${formatClock(next)}`;
+    detail = nextName ? `${nextName} in ${formatClock(next)}` : `Next in ${formatClock(next)}`;
   } else if (state.enabled) {
     title = "Reminders On";
     detail = "Every nudge is off";
