@@ -1,1 +1,0 @@
-{"main-capability":{"identifier":"main-capability","description":"core permissions for the tray and window IPC","local":true,"windows":["*"],"permissions":["core:default","core:window:allow-close","core:window:allow-set-focus","core:window:allow-start-dragging","core:event:default"]}}
