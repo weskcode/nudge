@@ -1,6 +1,6 @@
 [package]
 name = "nudge"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 rust-version = "1.77"
 description = "Firm but gentle periodic reminders, from your system tray"
