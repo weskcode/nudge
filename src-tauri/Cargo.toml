@@ -19,7 +19,7 @@ dirs = "6"
 # the versions Tauri already uses, so nothing new is downloaded or built
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSDictionary", "NSAttributedString"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSFont", "NSColor", "NSParagraphStyle", "NSText", "NSAttributedString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSResponder", "NSWindow", "NSFont", "NSColor", "NSParagraphStyle", "NSText", "NSAttributedString"] }
 
 [dependencies.tauri-plugin-autostart]
 version = "2"
