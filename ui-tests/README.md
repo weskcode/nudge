@@ -1,81 +1,23 @@
-# UI snapshots (point-in-time reference)
+# Screenshots
 
-## 2026-09-30, 1.0.1 icon
+The images the main README shows, all captured on macOS 27 in dark mode at 2x.
+Settings and the menu come from a debug build run with `HOME` pointed at a
+temporary folder holding three sample nudges, so no real settings appear in
+them. Pages were switched without synthetic keyboard or mouse input.
 
-Captured on macOS 27, dark appearance, Retina (2x), with
-`screencapture -l <window id>`. The README shows both overlays and the first three.
+- `overlay-frosted-2026-09-30.png`: a reminder in the Frosted style with the
+  Card layout, a break idea and a 20 second break. Frosted blurs the desktop
+  behind it, and a window capture drops that blur, so this is a full display
+  capture, cropped to remove the menu bar and the area below the card, then
+  scaled to 2000 px wide. Nothing behind the blur is readable.
+- `overlay-2026-09-30.png`: the same reminder in the Ocean style, cropped and
+  scaled the same way.
+- `settings-reminder-2026-09-30.png`: the Reminder page for a nudge using the
+  eye symbol, the Forest style and the Ring layout.
+- `settings-schedule-2026-09-30.png`: the Schedule page counting down to the
+  next reminder.
+- `tray-2026-09-30.png`: the menu bar menu with a countdown line for each of
+  three nudges.
 
-- `settings-reminder-2026-09-30.png` and `settings-schedule-2026-09-30.png`:
-  the Settings window with the linocut bell in the sidebar. A debug build of
-  `9edd7bf` ran with `HOME` pointed at a temp folder holding three sample
-  nudges, so the installed app and its settings were left alone. Pages were
-  switched with AX press actions.
-- `tray-2026-09-30.png`: the menu bar menu from the same build, one countdown
-  line per nudge.
-- `about-2026-09-30.png`: the About panel of the installed, notarized 1.0.1
-  (`3a65cf1`). The unbundled debug build has no app icon, so its About panel
-  shows a folder. macOS draws the gray plate around the icon.
-- `overlay-2026-09-30.png`: the reminder as it appears when a nudge goes
-  off, from the same debug build: Card layout, Ocean style, a break idea and
-  a 20 second break. Started with Take a Break Now from the menu; it closed
-  on its own. Ocean was used because Frosted blurs the real desktop behind
-  it. Scaled from 2940 to 2000 px wide.
-- `overlay-frosted-2026-09-30.png`: the same reminder in the Frosted style,
-  over a blurred real desktop. A window capture drops the blur and shows a
-  flat gray card, so this is a full display capture
-  (`screencapture -D1`), cropped 70 px top and bottom to remove the menu bar,
-  then scaled to 2000 px wide. Nothing behind the blur is readable.
-
-## 2026-09-27, multiple nudges
-
-Captured from a debug build of the working tree (after `3dc3436`, before
-this change was committed) on macOS 27, light appearance, Retina (2x), with
-`screencapture -l <window id>`. The build ran with `HOME` pointed at a temp
-folder and three nudges in its config.json, so the installed app and its
-settings were left alone. Pages were switched with AX press actions.
-
-- `settings-nudges-2026-09-27.png`: the Schedule page with the nudge picker
-  in the pane bar and the "This nudge is on" switch (shown with 2+ nudges).
-- `nudge-picker-2026-09-27.png`: the picker open: each nudge, then New
-  Nudge… and Delete.
-- `settings-symbol-2026-09-27.png`: the Reminder page for a nudge using the
-  eye symbol, the Forest style and the Ring layout, with the Symbol row.
-- `tray-nudges-2026-09-27.png`: the menu bar menu with one countdown line per
-  nudge, soonest first.
-
-The overlay's "Also now" line was not captured from the app, because showing
-the reminder takes over every screen.
-
-## 2026-09-27
-
-Captured from the signed release build on macOS 27, Retina (2x), with
-`screencapture -l <window id>`.
-
-- `settings-2026-09-27.png`: the redesigned Settings window (780x580
-  logical), a sidebar styled like System Settings over the native window
-  material,
-  showing the Reminder page with its live preview, style swatches and the
-  Classic / Card / Ring layout picker (0.2.0, `3dc3436`, light appearance,
-  Card selected).
-- `about-2026-09-27.png`: the About panel opened from the menu bar menu
-  (working tree after `671e0e6`, dark appearance).
-
-The overlay was not recaptured: showing it takes over every screen.
-
-## 2026-09-12
-
-Date captured: 2026-09-12, bundled release build of the working tree at
-that time (auto-dismiss + interval floor + settings-persistence batch). Commit new screenshots next to these whenever the
-UI intentionally changes, named `<surface>-<YYYY-MM-DD>.png`.
-
-- `settings-current.png`: replica of the Settings window at its true
-  440x500 logical content size (same HTML/CSS/JS as `index.html`; the
-  real window differs only by native window chrome (title bar), which
-  adds ~28px above this region).
-
-How the settings replica was produced: NSStatusItem menus are not
-exposed to the accessibility bridge on modern macOS, so the tray menu
-could not be clicked programmatically. `index.html`/`styles.css`/
-`main.js` were served directly with a `window.__TAURI__` stub returning
-the current state shape, so the page used the same files, CSS and JS
-render path as the app.
+When the interface changes, replace these with new captures under the same
+names and update the date in the file names and here.

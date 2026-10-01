@@ -76,7 +76,6 @@ matters most if you have ADHD or tend to hyperfocus:
 - Sound: Chime, macOS system sounds, or none
 - Time left in the menu bar: never, only in the last 5 minutes as a heads-up,
   or always (macOS and Linux)
-- Show or hide the reminder counter
 - After waking from sleep: re-enable reminders, restart the timer
 - Open at login
 
