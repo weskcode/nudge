@@ -10,8 +10,8 @@ them. Pages were switched without synthetic keyboard or mouse input.
   behind it, and a window capture drops that blur, so this is a full display
   capture, cropped to remove the menu bar and the area below the card, then
   scaled to 2000 px wide. Nothing behind the blur is readable.
-- `overlay-2026-09-30.png`: the same reminder in the Ocean style, cropped and
-  scaled the same way.
+- `overlay-2026-09-30.png`: the same nudge in the Ocean style, showing a
+  different break idea, cropped and scaled the same way.
 - `settings-reminder-2026-09-30.png`: the Reminder page for a nudge using the
   eye symbol, the Forest style and the Ring layout.
 - `settings-schedule-2026-09-30.png`: the Schedule page counting down to the
