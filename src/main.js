@@ -55,7 +55,7 @@ function renderStatus() {
   const deadline = deadlines.get(nudge.id);
   const left = secsUntil(deadline);
   // the sidebar and the menu bar count down to whichever nudge is next; with
-  // several, the sidebar says which one it is
+  // several, the sidebar's title names it
   const soonest = [...deadlines].reduce((a, b) => (a && a[1] <= b[1] ? a : b), null);
   const next = secsUntil(soonest ? soonest[1] : undefined);
   const nextName = soonest && state.nudges.length > 1
@@ -67,8 +67,8 @@ function renderStatus() {
     title = "Reminder Showing";
     detail = "Dismiss it to continue";
   } else if (state.enabled && next !== null) {
-    title = "Reminders On";
-    detail = nextName ? `${nextName} in ${formatClock(next)}` : `Next in ${formatClock(next)}`;
+    title = nextName || "Reminders On";
+    detail = `Next in ${formatClock(next)}`;
   } else if (state.enabled) {
     title = "Reminders On";
     detail = "Every nudge is off";
@@ -109,24 +109,7 @@ function renderStatus() {
   }
 
   if ($("status-title").textContent !== title) $("status-title").textContent = title;
-  // with several nudges the name shortens with an ellipsis, never the time
-  const status = $("status-detail");
-  if (status.dataset.shown !== detail) {
-    status.dataset.shown = detail;
-    const when = nextName && detail.startsWith(nextName) ? detail.slice(nextName.length) : null;
-    status.classList.toggle("named", when !== null);
-    if (when === null) {
-      status.textContent = detail;
-    } else {
-      const name = document.createElement("span");
-      name.className = "name";
-      name.textContent = nextName;
-      const time = document.createElement("span");
-      time.className = "when";
-      time.textContent = when.trim();
-      status.replaceChildren(name, time);
-    }
-  }
+  $("status-detail").textContent = detail;
   $("countdown-label").textContent = label;
   $("countdown-time").textContent = time;
   $("countdown-detail").textContent = info;

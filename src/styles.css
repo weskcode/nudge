@@ -285,9 +285,6 @@ body {
 .status-text { flex: 1; min-width: 0; white-space: nowrap; }
 .status h1 { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .status p { font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
-.status p.named { display: flex; }
-.status p.named .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.status p.named .when { flex: none; margin-left: 0.3em; }
 .status input { transform: scale(0.82); transform-origin: right center; }
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
