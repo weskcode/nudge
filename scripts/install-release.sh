@@ -37,7 +37,15 @@ if [ ! -d "$APP" ]; then
 fi
 
 TARGET=/Applications/Nudge.app
-pkill -f Nudge.app/Contents/MacOS/nudge || true
+# never replace a different app that happens to be called Nudge
+if [ -d "$TARGET" ]; then
+  EXISTING="$(defaults read "$TARGET/Contents/Info" CFBundleIdentifier 2>/dev/null || true)"
+  if [ "$EXISTING" != "in.nudge.app" ]; then
+    echo "$TARGET is a different app (${EXISTING:-no bundle ID}); not replacing it" >&2
+    exit 1
+  fi
+fi
+pkill -f "$TARGET/Contents/MacOS/nudge" || true
 rm -rf "$TARGET"
 cp -R "$APP" "$TARGET"
 open "$TARGET"
