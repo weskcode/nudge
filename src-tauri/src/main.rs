@@ -166,14 +166,20 @@ struct App {
 struct Problems {
     save: bool,
     login_item: bool,
+    // the unreadable settings file that was moved aside at launch
+    set_aside: Option<String>,
 }
 
 impl Problems {
     fn text(&self) -> Option<String> {
         if self.save {
-            Some("Settings couldn't be saved, so changes will be lost when Nudge quits.".into())
+            Some("Settings couldn’t be saved, so changes will be lost when Nudge quits.".into())
+        } else if let Some(name) = &self.set_aside {
+            Some(format!(
+                "Your settings file couldn’t be read, so Nudge started with the defaults. The old file is kept as {name}."
+            ))
         } else if self.login_item {
-            Some("Open at login couldn't be changed.".into())
+            Some("Open at login couldn’t be changed.".into())
         } else {
             None
         }
@@ -270,28 +276,41 @@ fn config_json(config: &Config) -> serde_json::Value {
     value
 }
 
-fn load_config() -> Config {
+fn load_config() -> (Config, Option<PathBuf>) {
     config_path().map(|path| load_from(&path)).unwrap_or_default()
 }
 
-// a file that exists but can't be read (a bad hand edit, or one written by a
-// newer version) is moved aside rather than left for the next save to replace
-fn load_from(path: &std::path::Path) -> Config {
-    let Ok(text) = fs::read_to_string(path) else {
-        return Config::default();
+// a file that exists but can't be read (a bad hand edit, one in another text
+// encoding, or one written by a newer version) is moved aside rather than left
+// for the next save to replace; returns where it went
+fn load_from(path: &std::path::Path) -> (Config, Option<PathBuf>) {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (Config::default(), None),
+        Err(_) => Vec::new(),
     };
-    if let Some(config) = parse_config(&text) {
-        return config;
+    if let Some(config) = String::from_utf8(bytes).ok().and_then(|text| parse_config(&text)) {
+        return (config, None);
     }
     let stamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let kept = path.with_file_name(format!("config.json.bad-{stamp}"));
-    match fs::rename(path, &kept) {
-        Ok(()) => println!("settings could not be read; kept them as {}", kept.display()),
-        Err(error) => println!("settings could not be read or kept aside: {error:?}"),
+    let mut kept = path.with_file_name(format!("config.json.bad-{stamp}"));
+    let mut n = 1;
+    while kept.exists() {
+        n += 1;
+        kept = path.with_file_name(format!("config.json.bad-{stamp}-{n}"));
     }
-    Config::default()
+    match fs::rename(path, &kept) {
+        Ok(()) => {
+            println!("settings could not be read; kept them as {}", kept.display());
+            (Config::default(), Some(kept))
+        }
+        Err(error) => {
+            println!("settings could not be read or kept aside: {error:?}");
+            (Config::default(), None)
+        }
+    }
 }
 
 fn save_config(app: &AppHandle) {
@@ -1345,7 +1364,9 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let handle = app.handle().clone();
-            let mut config = load_config();
+            let (mut config, set_aside) = load_config();
+            app.state::<App>().problems.lock().unwrap().set_aside =
+                set_aside.and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()));
             // the login item can be removed outside the app (System Settings),
             // so trust the OS over the saved flag
             {
@@ -1526,16 +1547,24 @@ mod tests {
         let path = dir.join("config.json");
 
         // no file yet: defaults, and nothing set aside
-        assert_eq!(load_from(&path), Config::default());
+        assert_eq!(load_from(&path), (Config::default(), None));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
 
         std::fs::write(&path, "{ not json").unwrap();
-        assert_eq!(load_from(&path), Config::default());
+        let (config, kept) = load_from(&path);
+        assert_eq!(config, Config::default());
         assert!(!path.exists(), "the unreadable file must be moved, so a save can't destroy it");
-        let kept: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
-        assert_eq!(kept.len(), 1);
-        assert!(kept[0].file_name().unwrap().to_string_lossy().starts_with("config.json.bad-"));
-        assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "{ not json");
+        let kept = kept.expect("it says where the file went");
+        assert!(kept.file_name().unwrap().to_string_lossy().starts_with("config.json.bad-"));
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "{ not json");
+
+        // a file in another text encoding is set aside too, under a name that
+        // doesn't replace the first one even within the same second
+        std::fs::write(&path, b"{\"nudges\":[{\"message\":\"caf\xe9\"}]}").unwrap();
+        let (_, second) = load_from(&path);
+        let second = second.expect("a non-UTF-8 file is set aside");
+        assert_ne!(second, kept);
+        assert!(kept.exists() && second.exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1546,8 +1575,11 @@ mod tests {
         assert_eq!(problems.text(), None);
         problems.login_item = true;
         assert!(problems.text().unwrap().contains("Open at login"));
+        problems.set_aside = Some("config.json.bad-1".into());
+        assert!(problems.text().unwrap().contains("config.json.bad-1"));
         problems.save = true;
-        assert!(problems.text().unwrap().contains("couldn't be saved"));
+        assert!(problems.text().unwrap().contains("couldn’t be saved"));
+        problems.set_aside = None;
         problems.save = false;
         problems.login_item = false;
         assert_eq!(problems.text(), None);
