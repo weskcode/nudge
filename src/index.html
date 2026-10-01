@@ -143,8 +143,8 @@
           <div class="group icons">
             <div class="row">
               <span class="tile t-teal"><svg><use href="#i-layout"/></svg></span>
-              <span class="text" id="l-layout">Layout<small id="layout-note"></small></span>
-              <div class="segmented" role="radiogroup" aria-labelledby="l-layout" id="layout">
+              <span class="text"><span id="l-layout">Layout</span><small id="layout-note"></small></span>
+              <div class="segmented" role="radiogroup" aria-labelledby="l-layout" aria-describedby="layout-note" id="layout">
                 <label><input type="radio" name="layout" value="classic" /><span>Classic</span></label>
                 <label><input type="radio" name="layout" value="card" /><span>Card</span></label>
                 <label><input type="radio" name="layout" value="ring" /><span>Ring</span></label>
@@ -193,8 +193,8 @@
           <div class="group icons">
             <div class="row">
               <span class="tile t-green"><svg><use href="#i-hourglass"/></svg></span>
-              <label class="text" for="auto-dismiss">Break length<small id="break-note"></small></label>
-              <select id="auto-dismiss">
+              <span class="text"><label for="auto-dismiss">Break length</label><small id="break-note"></small></span>
+              <select id="auto-dismiss" aria-describedby="break-note">
                 <option value="0">Until I dismiss it</option>
                 <option value="20">20 seconds</option>
                 <option value="60">1 minute</option>
