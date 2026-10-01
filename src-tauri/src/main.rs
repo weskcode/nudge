@@ -693,12 +693,12 @@ fn close_overlay(app: AppHandle) {
     let _ = app.run_on_main_thread(move || finish_overlay(&handle, None));
 }
 
-fn on_wake(app: &AppHandle) {
+fn on_wake(app: &AppHandle, slept: Duration) {
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || on_wake_main(&handle));
+    let _ = app.run_on_main_thread(move || on_wake_main(&handle, slept));
 }
 
-fn on_wake_main(app: &AppHandle) {
+fn on_wake_main(app: &AppHandle, slept: Duration) {
     let state = app.state::<App>();
     let (enabled_on_wake, reset_on_wake) = {
         let config = state.config.lock().unwrap();
@@ -707,8 +707,12 @@ fn on_wake_main(app: &AppHandle) {
 
     finish_overlay(app, None);
     let on = is_on(app);
-    if (enabled_on_wake && !on) || (on && reset_on_wake) {
+    if enabled_on_wake && !on {
         set_reminders(app, true);
+    } else if on && reset_on_wake {
+        // restart the timers but keep what is left of a pause
+        let timers = enabled_timers(&nudges(app));
+        state.schedule.lock().unwrap().after_wake(&timers, Instant::now(), slept);
     }
     refresh_tray(app);
     broadcast(app);
@@ -768,7 +772,7 @@ fn tick_loop(app: AppHandle) {
         last_checked = Instant::now();
         last_wall = SystemTime::now();
         if wall_delta > steady_delta + 3 {
-            on_wake(&app);
+            on_wake(&app, Duration::from_secs(wall_delta - steady_delta));
         }
 
         // on the main thread, so a menu click (pause, turn off) can't land

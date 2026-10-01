@@ -114,6 +114,19 @@ impl Schedule {
         self.resume(timers, now);
     }
 
+    // after the Mac wakes, every enabled nudge starts a full interval over. a
+    // pause carries on, less the time asleep: Instant stops during sleep, so a
+    // two-hour pause with an hour asleep has an hour left
+    pub fn after_wake(&mut self, timers: &[(u32, Duration)], now: Instant, slept: Duration) {
+        let paused_until = self
+            .paused_until
+            .and_then(|until| until.checked_sub(slept))
+            .filter(|&until| until > now);
+        self.next.clear();
+        self.paused_until = paused_until;
+        self.resume(timers, now);
+    }
+
     // nothing fires before `until`; a nudge already due later keeps its time
     pub fn pause(&mut self, ids: &[u32], until: Instant) {
         if !self.on {
@@ -451,5 +464,29 @@ mod tests {
         let nudges = [(1, long), (2, "Water")];
         let schedule = on_with(now, &[(1, 60)]);
         assert_eq!(schedule.menu_lines(&nudges, now), vec!["Stand up, stretch and walk to t… · 1:00"]);
+    }
+
+    #[test]
+    fn a_pause_outlasts_a_wake_less_the_time_asleep() {
+        let now = Instant::now();
+        let hour = MIN * 60;
+        let mut schedule = on_with(now, &[(1, 600)]);
+        schedule.pause(&[1], now + hour * 2);
+        // the clock this runs on stops while the Mac sleeps: an hour asleep
+        // leaves an hour of the two-hour pause
+        schedule.after_wake(&[(1, Duration::from_secs(600))], now, hour);
+        assert_eq!(schedule.remaining(1, now), 3600);
+    }
+
+    #[test]
+    fn a_pause_that_ran_out_during_sleep_is_over() {
+        let now = Instant::now();
+        let mut schedule = on_with(now, &[(1, 600)]);
+        schedule.pause(&[1], now + MIN * 30);
+        schedule.after_wake(&[(1, Duration::from_secs(600))], now, MIN * 60);
+        assert_eq!(schedule.remaining(1, now), 600);
+        // nothing of the old pause holds a timer started now
+        schedule.resume(&[(1, MIN)], now);
+        assert_eq!(schedule.remaining(1, now), 60);
     }
 }
