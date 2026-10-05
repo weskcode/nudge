@@ -158,7 +158,7 @@ function replayPreview() {
 function renderPreview(n, message = n.message) {
   const preview = $("live-preview");
   const before = preview.className;
-  preview.className = `preview style-${n.style} size-${n.text_size} layout-${n.layout}${n.auto_dismiss_secs > 0 ? " has-ring" : ""}`;
+  preview.className = `preview style-${n.style} size-${n.text_size} layout-${n.layout} anim-${n.animation}${n.auto_dismiss_secs > 0 ? " has-ring" : ""}`;
   $("pv-symbol").setAttribute("href", `#s-${n.symbol}`);
   $("pv-message").textContent = message || "Time to step away";
   $("pv-idea").hidden = !n.break_ideas;
@@ -173,6 +173,13 @@ function layoutNote(n) {
   if (n.layout === "card") return "Your message on a glass card";
   if (n.layout === "ring") return n.auto_dismiss_secs > 0 ? "A large ring counts down the break" : "A large ring around the symbol";
   return "Your message right on the backdrop";
+}
+
+// says how the selected animation feels
+function animationNote(n) {
+  if (n.animation === "bloom") return "The backdrop first, then each detail in turn";
+  if (n.animation === "whisper") return "A short fade, nothing moves";
+  return "A slow fade with a small drift up";
 }
 
 // a nudge's tile wears its symbol in the colour of its reminder style
@@ -264,9 +271,11 @@ function render(s) {
   setRadio("style", n.style);
   setRadio("text-size", n.text_size);
   setRadio("layout", n.layout);
+  setRadio("animation", n.animation);
 
   setSelect($("auto-dismiss"), n.auto_dismiss_secs, (v) => `${v} seconds`);
   $("layout-note").textContent = layoutNote(n);
+  $("animation-note").textContent = animationNote(n);
   $("break-note").textContent =
     n.auto_dismiss_secs > 0 ? "The reminder closes by itself after this long" : "The reminder stays until you close it";
   setSelect($("snooze"), n.snooze_mins, (v) => plural(v, "minute"));
@@ -525,6 +534,9 @@ document.querySelectorAll('input[name="text-size"]').forEach((input) =>
 );
 document.querySelectorAll('input[name="layout"]').forEach((input) =>
   input.addEventListener("change", () => saveNudge({ layout: input.value })),
+);
+document.querySelectorAll('input[name="animation"]').forEach((input) =>
+  input.addEventListener("change", () => saveNudge({ animation: input.value })),
 );
 $("preview").addEventListener("click", () => call("preview_reminder", { id: current().id }));
 

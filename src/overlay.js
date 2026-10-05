@@ -21,6 +21,11 @@ const BREAK_IDEAS = [
 
 const isMac = navigator.userAgent.includes("Mac");
 let snoozeMins = 5;
+let enterMs = 0;
+
+// how long each animation (Settings picks one per nudge) takes to fade in, and,
+// off macOS, out; styles.css has the matching keyframes
+const FADE_MS = { calm: [700, 300], bloom: [600, 260], whisper: [450, 200] };
 
 // keys and clicks already in flight when the reminder opened were meant for
 // another app; ignore them so the reminder can't vanish unseen
@@ -82,6 +87,13 @@ listen("nudge://overlay", (event) => renderAlso(event.payload.also))
   .then((s) => {
     document.body.classList.add(`style-${s.style}`, `size-${s.text_size}`, `layout-${s.layout}`);
     if (!isMac) document.body.classList.add("no-blur");
+    const animation = FADE_MS[s.animation] ? s.animation : "calm";
+    const [enter, leaveMs] = reduceMotion.matches ? [0, 0] : FADE_MS[animation];
+    enterMs = enter;
+    document.body.classList.add(`anim-${animation}`);
+    document.body.style.setProperty("--enter", `${enter}ms`);
+    document.body.style.setProperty("--leave", `${leaveMs}ms`);
+    fadeOutMs = leaveMs;
 
     $("glyph-symbol").setAttribute("href", `#s-${s.symbol}`);
     $("overlay-text").textContent = s.message;
@@ -115,16 +127,26 @@ listen("nudge://overlay", (event) => renderAlso(event.payload.also))
     // give VoiceOver and the keyboard a control to start from; Enter and Space on
     // a button are already kept out of press-any-key
     $("done").focus({ focusVisible: false });
+  })
+  .catch(() => {})
+  .then(() => {
+    // everything starts together now that the reminder has its content: the
+    // page's animation and, on macOS, the window fade that brings the blur in.
+    // this runs even if the content failed to load, so the reminder always shows
+    document.body.classList.add("ready");
+    invoke("overlay_fade", { ms: enterMs }).catch(() => {});
   });
 
-// fade out before the window closes; the first request wins
+// fade out before the window closes; the first request wins. on macOS the app
+// fades every screen's window out itself, so there is nothing to wait for here
+let fadeOutMs = 0;
 function leave(command, args) {
   if (document.body.classList.contains("leaving")) return;
   // on failure bring the reminder back so it can be dismissed again
   const send = () => invoke(command, args).catch(() => document.body.classList.remove("leaving"));
-  if (reduceMotion.matches) return send();
+  if (isMac || reduceMotion.matches) return send();
   document.body.classList.add("leaving");
-  setTimeout(send, 160);
+  setTimeout(send, fadeOutMs);
 }
 
 function dismiss() {

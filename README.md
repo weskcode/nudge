@@ -72,6 +72,10 @@ matters most if you have ADHD or tend to hyperfocus:
 - Three reminder layouts: Classic (text on the backdrop), Card (a glass panel)
   and Ring (a large ring around the icon that counts down the break when a
   break length is set)
+- Three animations for how the reminder fades in and out: Calm (a slow fade
+  with a small drift up), Bloom (the backdrop first, then each detail in turn)
+  and Whisper (a short fade, nothing moves). With Reduce Motion on, the
+  reminder just appears
 - Break length: the reminder can close by itself after 20 seconds to 10
   minutes, with a ring that shows the time left
 - Snooze length (or no snooze button at all)

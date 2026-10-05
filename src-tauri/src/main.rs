@@ -7,6 +7,7 @@ mod schedule;
 
 use schedule::{hms, Schedule, Showing};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command as ProcCommand;
@@ -39,6 +40,8 @@ struct Nudge {
     sound: String,
     snooze_mins: u32,
     layout: String,
+    // how the reminder fades in and out (ANIMATIONS)
+    animation: String,
 }
 
 impl Default for Nudge {
@@ -58,6 +61,7 @@ impl Default for Nudge {
             sound: "chime".into(),
             snooze_mins: 5,
             layout: "classic".into(),
+            animation: "calm".into(),
         }
     }
 }
@@ -81,6 +85,7 @@ const TEXT_SIZES: &[&str] = &["standard", "large", "xlarge"];
 const SOUNDS: &[&str] = &["chime", "glass", "hero", "ping", "purr", "submarine"];
 const MENU_BAR_TIMERS: &[&str] = &["never", "last5", "always"];
 const LAYOUTS: &[&str] = &["classic", "card", "ring"];
+const ANIMATIONS: &[&str] = &["calm", "bloom", "whisper"];
 const SYMBOLS: &[&str] = &["figure", "drop", "eye", "breath", "pill", "bell"];
 const MAX_NUDGES: usize = 8;
 // the shortest and longest gap between reminders that Settings offers
@@ -161,6 +166,9 @@ struct App {
     problems: Mutex<Problems>,
     // the last nudge deleted, for Undo
     deleted: Mutex<Option<Deleted>>,
+    // each reminder window's fade: a counter that stops an earlier fade when a
+    // newer one starts (0 = never faded), and the opacity it last set
+    fades: Mutex<HashMap<String, (u64, f64)>>,
 }
 
 struct Deleted {
@@ -251,6 +259,7 @@ fn sanitize(config: &mut Config) {
         keep_if_known(&mut nudge.symbol, SYMBOLS, defaults.symbol.clone());
         keep_if_known(&mut nudge.text_size, TEXT_SIZES, defaults.text_size.clone());
         keep_if_known(&mut nudge.sound, SOUNDS, defaults.sound.clone());
+        keep_if_known(&mut nudge.animation, ANIMATIONS, defaults.animation.clone());
     }
 }
 
@@ -611,7 +620,12 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
         match builder.build() {
             Ok(window) => {
                 #[cfg(target_os = "macos")]
-                float_over_everything(&window);
+                {
+                    float_over_everything(&window);
+                    // invisible until the page has its content and fades in
+                    state.fades.lock().unwrap().insert(label.clone(), (0, 0.0));
+                    set_window_alpha(app, &label, 0.0);
+                }
                 opened.push(label);
             }
             Err(error) => println!("overlay {label} failed to create: {error:?}"),
@@ -632,6 +646,8 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
     }
 
     let primary = opened.first().cloned();
+    #[cfg(target_os = "macos")]
+    let opened_labels = opened.clone();
     state.schedule.lock().unwrap().open(Showing {
         look,
         due,
@@ -639,6 +655,22 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
         windows: opened,
         shown_at: Instant::now(),
     });
+
+    // a page that never asks for its fade must not leave the reminder invisible
+    #[cfg(target_os = "macos")]
+    {
+        let handle = app.clone();
+        let labels = opened_labels;
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(2));
+            for label in labels {
+                let waiting = handle.state::<App>().fades.lock().unwrap().get(&label).is_some_and(|fade| fade.0 == 0);
+                if waiting {
+                    fade_window(&handle, &label, 1.0, 0);
+                }
+            }
+        });
+    }
 
     #[cfg(target_os = "macos")]
     let _ = app.show();
@@ -692,21 +724,57 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
     true
 }
 
+// how long a reminder takes to fade out on macOS
+#[cfg(target_os = "macos")]
+const LEAVE_MS: u64 = 220;
+
 // take the reminder off every screen; the caller decides what its nudges do next
 fn close_windows(app: &AppHandle) -> Option<Showing> {
     let shown = app.state::<App>().schedule.lock().unwrap().close()?;
-    for label in &shown.windows {
+    // on macOS the windows fade out on every screen first; one that never
+    // became visible closes at once
+    #[cfg(target_os = "macos")]
+    {
+        let visible = {
+            let state = app.state::<App>();
+            let fades = state.fades.lock().unwrap();
+            shown.windows.iter().any(|label| fades.get(label).is_some_and(|fade| fade.1 > 0.01))
+        };
+        if visible {
+            for label in &shown.windows {
+                fade_window(app, label, 0.0, LEAVE_MS);
+            }
+            let handle = app.clone();
+            let labels = shown.windows.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(LEAVE_MS + 30));
+                let closer = handle.clone();
+                let _ = handle.run_on_main_thread(move || remove_windows(&closer, &labels));
+            });
+            return Some(shown);
+        }
+    }
+    remove_windows(app, &shown.windows);
+    Some(shown)
+}
+
+fn remove_windows(app: &AppHandle, labels: &[String]) {
+    for label in labels {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.close();
         }
+        #[cfg(target_os = "macos")]
+        app.state::<App>().fades.lock().unwrap().remove(label);
     }
     // only hide the whole app when no settings window is open that the user
-    // may still be interacting with
+    // may still be interacting with, and no newer reminder has opened
     #[cfg(target_os = "macos")]
-    if app.get_webview_window("settings").is_none() {
-        let _ = app.hide();
+    {
+        let showing = app.state::<App>().schedule.lock().unwrap().showing.is_some();
+        if !showing && app.get_webview_window("settings").is_none() {
+            let _ = app.hide();
+        }
     }
-    Some(shown)
 }
 
 // dismiss the reminder and carry on: the nudges it answered start over, a
@@ -728,6 +796,81 @@ fn finish_overlay(app: &AppHandle, snooze_mins: Option<u32>) {
         .resume(&timers, Instant::now());
     refresh_tray(app);
     broadcast(app);
+}
+
+// the macOS blur is a native layer under the page, so only the window's own
+// opacity can fade it together with the content. a reminder window opens at 0
+// and its page asks for the fade in once it has its content; a newer fade
+// takes over from where the last one got to
+#[cfg(target_os = "macos")]
+fn fade_window(app: &AppHandle, label: &str, to: f64, ms: u64) {
+    let (generation, from) = {
+        let state = app.state::<App>();
+        // a fade in only for a reminder still on screen: a page that asks late
+        // must not bring back one that was just dismissed. holding the schedule
+        // while the counter moves means a close lands before or after, never between
+        let schedule = state.schedule.lock().unwrap();
+        if to > 0.0 && !schedule.showing.as_ref().is_some_and(|s| s.windows.iter().any(|w| w == label)) {
+            return;
+        }
+        let mut fades = state.fades.lock().unwrap();
+        let Some(fade) = fades.get_mut(label) else {
+            return;
+        };
+        fade.0 += 1;
+        (fade.0, fade.1)
+    };
+    let handle = app.clone();
+    let label = label.to_string();
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        loop {
+            let t = if ms == 0 {
+                1.0
+            } else {
+                (start.elapsed().as_secs_f64() * 1000.0 / ms as f64).min(1.0)
+            };
+            // an S-curve starts gently, so a hitch while the page first paints stays unseen
+            let alpha = from + (to - from) * t * t * (3.0 - 2.0 * t);
+            match handle.state::<App>().fades.lock().unwrap().get_mut(&label) {
+                Some(fade) if fade.0 == generation => fade.1 = alpha,
+                _ => return,
+            }
+            let target = handle.clone();
+            let name = label.clone();
+            if handle.run_on_main_thread(move || set_window_alpha(&target, &name, alpha)).is_err() || t >= 1.0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn set_window_alpha(app: &AppHandle, label: &str, alpha: f64) {
+    use objc2_app_kit::NSWindow;
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let Ok(pointer) = window.ns_window() else {
+        return;
+    };
+    // SAFETY: Tauri hands back the window's live NSWindow, and this runs on the main thread
+    let ns_window: &NSWindow = unsafe { &*pointer.cast() };
+    ns_window.setAlphaValue(alpha);
+}
+
+// the reminder page calls this when it has its content, to fade the window in;
+// the fade out is close_windows's. the other platforms have no native blur and
+// fade in the page
+#[tauri::command]
+fn overlay_fade(window: tauri::WebviewWindow, ms: u64) {
+    #[cfg(target_os = "macos")]
+    if window.label().starts_with("overlay-") {
+        fade_window(window.app_handle(), window.label(), 1.0, ms.min(2000));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, ms);
 }
 
 #[tauri::command]
@@ -1076,6 +1219,7 @@ fn set_nudge(
     sound: Option<String>,
     snooze_mins: Option<u32>,
     layout: Option<String>,
+    animation: Option<String>,
 ) {
     let state = app.state::<App>();
     // what the schedule has to hear, applied once the config lock is released
@@ -1129,6 +1273,9 @@ fn set_nudge(
         }
         if let Some(value) = layout.filter(|v| LAYOUTS.contains(&v.as_str())) {
             nudge.layout = value;
+        }
+        if let Some(value) = animation.filter(|v| ANIMATIONS.contains(&v.as_str())) {
+            nudge.animation = value;
         }
         let timer = (nudge.id, Duration::from_secs(nudge.interval_secs as u64));
         ((start && nudge.enabled).then_some(timer), stop)
@@ -1404,6 +1551,7 @@ fn main() {
             last_label: Mutex::new(String::new()),
             problems: Mutex::new(Problems::default()),
             deleted: Mutex::new(None),
+            fades: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -1413,6 +1561,7 @@ fn main() {
             delete_nudge,
             undo_delete,
             get_overlay,
+            overlay_fade,
             close_overlay,
             snooze,
             set_enabled,
@@ -1591,7 +1740,7 @@ mod tests {
         let text = r#"{"enabled_on_wake":true,"reset_on_wake":true,"launch_at_login":false,
             "count_total":0,"menu_bar_timer":"sometimes","nudges":[{"id":1,"interval_secs":0,
             "auto_dismiss_secs":99999,"snooze_mins":500,"style":"neon","layout":"spiral",
-            "symbol":"skull","text_size":"huge","sound":"klaxon"}]}"#;
+            "symbol":"skull","text_size":"huge","sound":"klaxon","animation":"confetti"}]}"#;
         let config = parse_config(text).unwrap();
         let nudge = &config.nudges[0];
         assert_eq!(nudge.interval_secs, 5 * 60);
@@ -1603,10 +1752,20 @@ mod tests {
         assert_eq!(nudge.symbol, defaults.symbol);
         assert_eq!(nudge.text_size, defaults.text_size);
         assert_eq!(nudge.sound, defaults.sound);
+        assert_eq!(nudge.animation, defaults.animation);
         assert_eq!(config.menu_bar_timer, "never");
 
         let long = r#"{"nudges":[{"id":1,"interval_secs":999999}]}"#;
         assert_eq!(parse_config(long).unwrap().nudges[0].interval_secs, 8 * 60 * 60);
+    }
+
+    #[test]
+    fn a_file_without_an_animation_gets_the_calm_fade_and_a_chosen_one_is_kept() {
+        let old = parse_config(r#"{"nudges":[{"id":1,"style":"dusk"}]}"#).unwrap();
+        assert_eq!(old.nudges[0].animation, "calm");
+        let chosen = parse_config(r#"{"nudges":[{"id":1,"animation":"bloom"},{"id":2,"animation":"whisper"}]}"#).unwrap();
+        assert_eq!(chosen.nudges[0].animation, "bloom");
+        assert_eq!(chosen.nudges[1].animation, "whisper");
     }
 
     #[test]
@@ -1945,7 +2104,7 @@ mod tests {
         let json = serde_json::to_value(state).unwrap();
         for key in [
             "message", "symbol", "style", "layout", "text_size", "break_ideas", "snooze_mins",
-            "auto_dismiss_secs", "count_total",
+            "auto_dismiss_secs", "animation", "count_total",
         ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }
