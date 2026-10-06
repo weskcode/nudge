@@ -12,8 +12,11 @@ them. Pages were switched without synthetic keyboard or mouse input.
   scaled to 2000 px wide. Nothing behind the blur is readable.
 - `overlay-2026-09-30.png`: the same nudge in the Ocean style, showing a
   different break idea, cropped and scaled the same way.
-- `settings-reminder-2026-09-30.png`: the Reminder page for a nudge using the
-  eye symbol, the Forest style and the Ring layout.
+- `settings-reminder-2026-10-05.png`: the Reminder page for a nudge using the
+  eye symbol, the Forest style, the Ring layout and the Bloom animation. It is
+  a window capture of a 1.0.7 release build run with `HOME` pointed at a
+  temporary folder holding one sample nudge, with the window made taller so
+  the Animation row shows.
 - `settings-schedule-2026-09-30.png`: the Schedule page counting down to the
   next reminder.
 - `tray-2026-09-30.png`: the menu bar menu with a countdown line for each of
