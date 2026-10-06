@@ -14,7 +14,7 @@ desk from time to time.
 </p>
 
 <p align="center">
-  <img src="ui-tests/settings-reminder-2026-09-30.png" alt="The Settings window on the Reminder page, with a live preview of a Ring layout reminder in the Forest style" width="720">
+  <img src="ui-tests/settings-reminder-2026-10-05.png" alt="The Settings window on the Reminder page, with a live preview of a Ring layout reminder in the Forest style and the Animation setting set to Bloom" width="720">
 </p>
 
 <p align="center">
