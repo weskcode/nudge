@@ -85,6 +85,14 @@ matters most if you have ADHD or tend to hyperfocus:
 - After waking from sleep: re-enable reminders, restart the timer
 - Open at login
 
+<p align="center">
+  <img src="ui-tests/reminder-styles-2026-10-13.gif" alt="The same Ring layout reminder shown in each of the five styles in turn: Frosted, Dusk, Ocean, Forest and Midnight" width="720">
+</p>
+
+<p align="center">
+  <img src="ui-tests/reminder-animations-2026-10-13.gif" alt="A Forest style reminder opening and closing with each of the three animations in turn: Calm, Bloom and Whisper" width="720">
+</p>
+
 ## Building from source
 
 Requires Node, npm and the Rust toolchain.
