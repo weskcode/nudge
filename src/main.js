@@ -324,6 +324,7 @@ function showPage(name, focus = false) {
   $("page-title").textContent = page.dataset.title;
   $("picker").hidden = !("nudge" in page.dataset);
   document.querySelector(".pages").scrollTop = 0;
+  if (tab.dataset.page === "general") refreshDiagnostics();
   if (focus) tab.focus();
   try {
     localStorage.setItem("nudge.page", tab.dataset.page);
@@ -361,6 +362,8 @@ if (isWindows) {
   $("tab-menubar").hidden = true; // the Windows tray cannot show text
 }
 $("h-wake").textContent = `After your ${device} wakes`;
+$("diagnostics-privacy").textContent =
+  `Diagnostics are counts and a few step names kept in a small file on this ${device}. They hold no reminder text, file names or paths, and Nudge sends them nowhere. Review shows exactly what would be shared, and copying it to send to someone is your choice. An unclean exit is a launch that never recorded a normal quit, such as a crash, a force quit or a power loss; its cause is unknown. On a Mac, a logout, restart, shutdown or Quit from another app counts as a normal quit when the system asks Nudge to quit, unless the record cannot be written in time.`;
 
 let saved = null;
 try {
@@ -556,6 +559,107 @@ $("menu-bar-timer").addEventListener("change", (e) => save({ menuBarTimer: e.tar
 $("enabled-on-wake").addEventListener("change", (e) => save({ enabledOnWake: e.target.checked }));
 $("reset-on-wake").addEventListener("change", (e) => save({ resetOnWake: e.target.checked }));
 $("launch-at-login").addEventListener("change", (e) => save({ launchAtLogin: e.target.checked }));
+
+// ----- diagnostics -----
+
+// the codes come from diagnostics.rs; the words are here
+const DIAGNOSTICS_STATUS = {
+  recording: `Recording on this ${device} only`,
+  off: "Off. Earlier records are kept",
+  setting_unreadable: "Off, because the setting couldn’t be read",
+  in_use: "Not recording, because another copy of Nudge is",
+  disk_full: "Not recording, because the disk is full",
+  unwritable: "Not recording, because the diagnostics folder can’t be written",
+};
+const DIAGNOSTICS_PROBLEM = {
+  stop_unsaved: "Couldn’t save this choice. Recording stays off until Nudge quits.",
+  start_unsaved: "Couldn’t turn recording on.",
+};
+
+function renderDiagnostics(d) {
+  $("keep-diagnostics").checked = d.keep;
+  const turningOn = d.keep && d.status === "off";
+  $("diagnostics-status").textContent =
+    (d.problem && DIAGNOSTICS_PROBLEM[d.problem]) || (turningOn ? "Turning on…" : DIAGNOSTICS_STATUS[d.status]) || "Status unavailable";
+  $("diag-panics").textContent = String(d.panics);
+  $("diag-stalls").textContent = String(d.stalls);
+  $("diag-unclean").textContent = String(d.unclean);
+  $("diag-scope").textContent = d.launches
+    ? `Counts cover the last ${d.launches} launch${d.launches === 1 ? "" : "es"}`
+    : "Nothing recorded yet";
+}
+
+function refreshDiagnostics() {
+  return invoke("get_diagnostics").then(renderDiagnostics, (error) => {
+    console.error("get_diagnostics failed", error);
+    $("diagnostics-status").textContent = "Status unavailable";
+  });
+}
+
+// one choice at a time, so a quick on and off reach the app in order
+let diagnosticsChoice = Promise.resolve();
+$("keep-diagnostics").addEventListener("change", (e) => {
+  const enabled = e.target.checked;
+  diagnosticsChoice = diagnosticsChoice.then(() =>
+    invoke("set_diagnostics", { enabled })
+      .then(renderDiagnostics, (error) => {
+        console.error("set_diagnostics failed", error);
+        return refreshDiagnostics();
+      })
+      // the recorder reports back within a second, and may find another copy recording
+      .then(() => setTimeout(refreshDiagnostics, 1500)),
+  );
+});
+
+// what is on screen is the text that is copied: one string, set once per review
+let reportText = "";
+function showReport(text, note) {
+  reportText = text;
+  $("report-text").value = text;
+  $("report-note").textContent = note;
+  $("diagnostics-report").hidden = false;
+  $("review-diagnostics").setAttribute("aria-expanded", "true");
+}
+
+$("review-diagnostics").addEventListener("click", () => {
+  invoke("review_diagnostics").then(
+    (text) => {
+      showReport(text, "This is everything that would be shared.");
+      $("report-text").focus();
+      $("report-text").setSelectionRange(0, 0);
+      $("report-text").scrollTop = 0;
+      $("diagnostics-report").scrollIntoView({ block: "nearest" });
+    },
+    (error) => {
+      console.error("review_diagnostics failed", error);
+      showReport("", "Couldn’t build the report.");
+    },
+  );
+});
+
+$("copy-report").addEventListener("click", () => {
+  if ($("report-text").value !== reportText) $("report-text").value = reportText;
+  const select = () => {
+    $("report-text").focus();
+    $("report-text").select();
+  };
+  const fallback = () => {
+    select();
+    $("report-note").textContent = `Couldn’t copy automatically. The text is selected: press ${isMac ? "⌘C" : "Ctrl+C"}.`;
+  };
+  if (!navigator.clipboard) return fallback();
+  navigator.clipboard.writeText(reportText).then(() => {
+    $("report-note").textContent = "Copied exactly as shown.";
+  }, fallback);
+});
+
+$("close-report").addEventListener("click", () => {
+  reportText = "";
+  $("report-text").value = "";
+  $("diagnostics-report").hidden = true;
+  $("review-diagnostics").setAttribute("aria-expanded", "false");
+  $("review-diagnostics").focus();
+});
 
 $("credits").addEventListener("click", (e) => {
   e.preventDefault();

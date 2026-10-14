@@ -109,6 +109,13 @@ certificate in your keychain (override with `APPLE_SIGNING_IDENTITY`). A
 stable signature lets macOS remember the Input Monitoring permission across
 updates. Without a certificate the app is ad-hoc signed.
 
+Debug builds also read `NUDGE_TEST_DATA_DIR`, which replaces the `nudge`
+config folder (settings and diagnostics) so a test copy never touches real
+files, and `NUDGE_DIAGNOSTICS_TEST` set to `stall`, `panic` or `quit`, which
+makes that copy freeze its main thread for 8 seconds, panic on a background
+thread or quit, a few seconds after diagnostics start. Release builds ignore
+both.
+
 Published releases are built with `sh scripts/build-release.sh`. It builds
 the signed app from a clean copy of the current commit, removes home folder
 paths from the binary and strips it. Notarizing is a separate step.
@@ -120,6 +127,41 @@ needs Input Monitoring (System Settings > Privacy & Security > Input
 Monitoring). Without it, the reminder still closes with a click, the Done
 button, or a key typed while the reminder has focus. Open at login installs a
 LaunchAgent in `~/Library/LaunchAgents`.
+
+## Diagnostics
+
+Nudge keeps a small record of how it has been running on your computer, so you
+can see whether it panicked, froze or ended without a normal quit. It is on by
+default and stays on your computer. Nothing is sent anywhere.
+
+Settings > General shows three counts over the last 20 launches:
+
+- Panics: a panic the app observed. One on a background thread does not end the
+  app.
+- UI stalls: the app did not respond for 5 seconds or more, noticed by a
+  separate watcher thread.
+- Unclean exits: a launch that never recorded a normal quit. A crash, a force
+  quit and a power loss all look like this, so the cause is unknown. On macOS,
+  a logout, restart, shutdown or Quit from another app is recorded as a normal
+  quit when the system asks Nudge to quit, but a launch still counts as unclean
+  if the record cannot be written in time.
+
+Review diagnostics shows the exact text that would be shared, and Copy report
+copies that text. Whether to send it to anyone is up to you.
+
+The record holds counts, fixed step names such as "saving settings" and coarse
+durations. It holds no reminder text, file names or paths, exact times, device
+identifiers or panic messages, and the report is rebuilt from those numbers each
+time rather than read back as text. It is a few kilobytes in `diagnostics` in
+the `nudge` folder of your user config directory, and deleting that folder
+removes it.
+
+Turn off Keep local diagnostics to stop recording. Turning it off saves once
+more, so counts and timings gathered since the last save are kept. After that nothing is
+written, including after a restart, and what was already kept stays viewable
+until you delete it. A second copy of Nudge does not record while another one is
+running. A panic that ends the app within about a second of happening can be
+missed, and a normal quit that cannot be written in time counts as unclean.
 
 ## Platform notes
 
