@@ -1,10 +1,12 @@
 // no console window behind the tray app on Windows release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod diagnostics;
 #[cfg(target_os = "macos")]
 mod key_tap;
 mod schedule;
 
+use diagnostics::Phase;
 use schedule::{hms, Schedule, Showing};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -208,9 +210,19 @@ impl Problems {
 #[cfg(target_os = "macos")]
 const DISMISS_GRACE: Duration = Duration::from_millis(1500);
 
+// the folder Nudge keeps its files in. a debug build can be pointed elsewhere
+// with NUDGE_TEST_DATA_DIR, so a test copy never touches real settings
+fn data_dir() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("NUDGE_TEST_DATA_DIR").filter(|dir| !dir.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    Some(dirs::config_dir()?.join("nudge"))
+}
+
 // None only without a home folder; a failed create_dir_all shows up when the save fails
 fn config_path() -> Option<PathBuf> {
-    let dir = dirs::config_dir()?.join("nudge");
+    let dir = data_dir()?;
     let _ = fs::create_dir_all(&dir);
     Some(dir.join("config.json"))
 }
@@ -332,6 +344,7 @@ fn load_from(path: &std::path::Path) -> (Config, Option<PathBuf>) {
 }
 
 fn save_config(app: &AppHandle) {
+    let _step = diagnostics::span(Phase::ConfigSave);
     let state = app.state::<App>();
     let json = config_json(&state.config.lock().unwrap());
     let result = match (serde_json::to_string_pretty(&json), config_path()) {
@@ -468,8 +481,10 @@ fn menu_bar_title(mode: &str, schedule: &Schedule, now: Instant) -> Option<Strin
 }
 
 fn refresh_tray(app: &AppHandle) {
+    let _step = diagnostics::span(Phase::TrayRefresh);
     let state = app.state::<App>();
     let (mode, messages) = {
+        let _wait = diagnostics::span(Phase::TrayConfig);
         let config = state.config.lock().unwrap();
         let messages: Vec<(u32, String)> =
             config.nudges.iter().map(|n| (n.id, n.message.clone())).collect();
@@ -478,6 +493,7 @@ fn refresh_tray(app: &AppHandle) {
     let names: Vec<(u32, &str)> = messages.iter().map(|(id, m)| (*id, m.as_str())).collect();
     let now = Instant::now();
     let (enabled, lines, title) = {
+        let _wait = diagnostics::span(Phase::TraySchedule);
         let schedule = state.schedule.lock().unwrap();
         let title = menu_bar_title(&mode, &schedule, now);
         (schedule.on, schedule.menu_lines(&names, now), title)
@@ -503,6 +519,7 @@ fn refresh_tray(app: &AppHandle) {
     let pause = state.pause_menu.lock().unwrap().clone();
     let tray = state.tray.lock().unwrap().clone();
 
+    let menu_step = diagnostics::span(Phase::TrayMenu);
     let items = match menu {
         Some(menu) => sync_countdown_items(app, &menu, items, lines.len()),
         None => items,
@@ -522,6 +539,8 @@ fn refresh_tray(app: &AppHandle) {
         // pausing only makes sense while reminders are on
         let _ = menu.set_enabled(enabled);
     }
+    drop(menu_step);
+    let _icon_step = diagnostics::span(Phase::TrayIcon);
     if let Some(tray) = tray {
         let _ = tray.set_tooltip(lines.first());
         // an empty title, not None: on macOS None leaves the last countdown up
@@ -564,6 +583,7 @@ fn sync_countdown_items(
 // cover every screen with the reminder for `look`, answering the nudges in
 // `due` (none for a preview); false when no window could open
 fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> bool {
+    let _step = diagnostics::span(Phase::OverlayOpen);
     let state = app.state::<App>();
     let seq = {
         let mut schedule = state.schedule.lock().unwrap();
@@ -759,6 +779,7 @@ fn close_windows(app: &AppHandle) -> Option<Showing> {
 }
 
 fn remove_windows(app: &AppHandle, labels: &[String]) {
+    let _step = diagnostics::span(Phase::OverlayClose);
     for label in labels {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.close();
@@ -1492,6 +1513,7 @@ fn float_over_everything(window: &tauri::WebviewWindow) {
 
 #[tauri::command]
 fn open_settings(app: AppHandle) {
+    let _step = diagnostics::span(Phase::SettingsOpen);
     // the app is hidden after each reminder and a menu bar app is never the
     // active one; unhide and focus, or Settings opens behind the frontmost app
     #[cfg(target_os = "macos")]
@@ -1535,7 +1557,8 @@ fn open_settings(app: AppHandle) {
 
 
 fn main() {
-    tauri::Builder::default()
+    diagnostics::init(data_dir());
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -1568,7 +1591,10 @@ fn main() {
             preview_reminder,
             preview_sound,
             open_settings,
-            open_credits
+            open_credits,
+            diagnostics::get_diagnostics,
+            diagnostics::set_diagnostics,
+            diagnostics::review_diagnostics
         ])
         .on_window_event(|window, event| {
             // keep the first overlay window key-focused while a reminder is showing, so
@@ -1596,6 +1622,7 @@ fn main() {
             }
         })
         .setup(|app| {
+            let _startup = diagnostics::span(Phase::Startup);
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let handle = app.handle().clone();
@@ -1689,7 +1716,10 @@ fn main() {
                     "settings" => open_settings(app.clone()),
                     #[cfg(target_os = "macos")]
                     "about" => show_about(app),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        diagnostics::quit_started();
+                        app.exit(0)
+                    }
                     _ => {}
                 })
                 .build(&handle)?;
@@ -1713,17 +1743,29 @@ fn main() {
                 std::thread::spawn(move || global_key_listener(key_handle));
             }
 
+            diagnostics::start(app.app_handle());
+            #[cfg(target_os = "macos")]
+            diagnostics::watch_terminate();
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building nudge")
-        .run(|_app, event| {
-            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
-                if code.is_none() {
-                    api.prevent_exit();
-                }
+        .expect("error while building nudge");
+    // run() is run_return() followed by process::exit(code) on every platform.
+    // splitting them gives a place after Tauri's cleanup where a normal quit is
+    // certain; RunEvent::Exit comes before the cleanup and proves nothing
+    let code = app.run_return(|_app, event| {
+        if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+            if code.is_none() {
+                api.prevent_exit();
+            } else {
+                diagnostics::quit_started();
             }
-        });
+        }
+    });
+    if code == 0 {
+        diagnostics::mark_clean_exit();
+    }
+    std::process::exit(code);
 }
 
 #[cfg(test)]
