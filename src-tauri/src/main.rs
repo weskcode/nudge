@@ -1716,7 +1716,10 @@ fn main() {
                     "settings" => open_settings(app.clone()),
                     #[cfg(target_os = "macos")]
                     "about" => show_about(app),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        diagnostics::quit_started();
+                        app.exit(0)
+                    }
                     _ => {}
                 })
                 .build(&handle)?;
@@ -1754,6 +1757,8 @@ fn main() {
         if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
             if code.is_none() {
                 api.prevent_exit();
+            } else {
+                diagnostics::quit_started();
             }
         }
     });

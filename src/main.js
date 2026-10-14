@@ -570,6 +570,9 @@ const DIAGNOSTICS_STATUS = {
   in_use: "Not recording, because another copy of Nudge is",
   disk_full: "Not recording, because the disk is full",
   unwritable: "Not recording, because the diagnostics folder can’t be written",
+  history_invalid: "Not recording, because the saved record isn’t one Nudge understands. It was left as it is",
+  history_unreadable: "Not recording, because the saved record can’t be read. It was left as it is",
+  close_pending: "The last record isn’t saved yet, and Nudge keeps trying",
 };
 const DIAGNOSTICS_PROBLEM = {
   stop_unsaved: "Couldn’t save this choice. Recording stays off until Nudge quits.",

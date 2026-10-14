@@ -22,6 +22,8 @@
 //   holds the loop is counted if it holds it that long.
 // - one process records at a time (a file lock). a second copy of Nudge shows
 //   the records and says it is not recording.
+// - a record that cannot be read, or is not one this version understands, is
+//   never replaced, renamed or copied: recording stays off and says why.
 
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
@@ -30,7 +32,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering::*};
-use std::sync::{Once, OnceLock};
+use std::sync::{Mutex, Once, OnceLock, PoisonError, TryLockError};
 use std::thread::Thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -39,12 +41,10 @@ const MAX_SESSIONS: usize = 20;
 const MAX_EVENTS: usize = 96;
 // the journal is a few kilobytes; anything near this size is not ours
 const MAX_JOURNAL_BYTES: u64 = 128 * 1024;
-const MAX_BUILD_CHARS: usize = 24;
 const MAX_BUILDS_LISTED: usize = 8;
 
 const JOURNAL: &str = "journal.json";
 const JOURNAL_TMP: &str = "journal.json.tmp";
-const JOURNAL_BAD: &str = "journal.bad";
 const LEASE: &str = "lease.lock";
 const OFF_MARKER: &str = "recording-off";
 
@@ -61,10 +61,12 @@ const BUCKETS: usize = SLOW_EDGES_MS.len();
 const BUCKET_LABELS: [&str; BUCKETS] = ["0.1 to 0.5 s", "0.5 to 1 s", "1 to 5 s", "5 s or more"];
 // the shortest gap between writes that only change the timing counters
 const SAVE_EVERY_MS: u64 = 30_000;
+// the gap between tries at the final write of a launch that was switched off
+const CLOSE_RETRY_MS: u64 = 10_000;
+// how long switching off waits for a record write already under way
+const COMMIT_WAIT: Duration = Duration::from_millis(250);
 // how long quitting waits for the final record
 const CLEAN_EXIT_WAIT: Duration = Duration::from_millis(300);
-
-// ----- steps -----
 
 // what the main thread is doing, named in advance; the only way a step enters a record
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -88,8 +90,8 @@ pub enum Phase {
     Unknown,
 }
 
-// the steps that can be timed
-const PHASE_COUNT: usize = 12;
+// every step before Background can be timed
+const PHASE_COUNT: usize = Phase::Background as usize;
 const SLOTS: usize = PHASE_COUNT * BUCKETS;
 const BACKGROUND: u8 = Phase::Background as u8;
 
@@ -143,23 +145,26 @@ fn slot(phase: Phase, bucket: usize) -> Option<usize> {
     (index < PHASE_COUNT && bucket < BUCKETS).then_some(index * BUCKETS + bucket)
 }
 
-// ----- what the main thread touches -----
-
 // everything a hook on the main thread or in the panic hook reads or writes is
 // an atomic here: no lock, no allocation, no disk
 struct Counters {
     phase: AtomicU8,
+    // set once the app has started to quit, and kept through the event loop's cleanup
+    quitting: AtomicBool,
     panics: AtomicU32,
     panic_phase: AtomicU8,
     slow: [AtomicU32; SLOTS],
     // the last probe the main thread answered
-    pong: AtomicU64,
-    // whether the preference lets anything be recorded
-    enabled: AtomicBool,
+    answered_probe: AtomicU64,
+    // bit 0: whether anything may be recorded. the rest counts changes, so a
+    // decision made from an older reading can be told apart and dropped
+    policy: AtomicU32,
     // an off choice that could not be saved: stay off until quit
-    forced_off: AtomicBool,
+    off_until_quit: AtomicBool,
     status: AtomicU8,
     problem: AtomicU8,
+    // held while a record write is committed, so switching off can wait for one
+    commit: Mutex<()>,
     clean_requested: AtomicBool,
     clean_ack: AtomicU8,
 }
@@ -171,16 +176,47 @@ impl Counters {
     const fn new() -> Self {
         Counters {
             phase: AtomicU8::new(0),
+            quitting: AtomicBool::new(false),
             panics: AtomicU32::new(0),
             panic_phase: AtomicU8::new(BACKGROUND),
             slow: [ZERO; SLOTS],
-            pong: AtomicU64::new(0),
-            enabled: AtomicBool::new(true),
-            forced_off: AtomicBool::new(false),
+            answered_probe: AtomicU64::new(0),
+            policy: AtomicU32::new(1),
+            off_until_quit: AtomicBool::new(false),
             status: AtomicU8::new(Status::Recording as u8),
             problem: AtomicU8::new(0),
+            commit: Mutex::new(()),
             clean_requested: AtomicBool::new(false),
             clean_ack: AtomicU8::new(0),
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.policy.load(Acquire) & 1 == 1
+    }
+
+    // a person's choice: takes hold at once and wins over any reading in flight
+    fn choose(&self, on: bool) {
+        let _ = self.policy.fetch_update(AcqRel, Acquire, |p| {
+            Some((p & !1).wrapping_add(2) | u32::from(on))
+        });
+    }
+
+    // a decision the recorder made from a reading taken when the policy was
+    // `seen`. it only counts if nothing was chosen since; the new value is returned
+    fn adopt(&self, seen: u32, on: bool) -> Option<u32> {
+        let next = if on { seen | 1 } else { seen & !1 };
+        self.policy
+            .compare_exchange(seen, next, AcqRel, Acquire)
+            .ok()
+            .map(|_| next)
+    }
+
+    fn current_phase(&self) -> Phase {
+        if self.quitting.load(Relaxed) {
+            Phase::Quit
+        } else {
+            Phase::from_u8(self.phase.load(Relaxed))
         }
     }
 
@@ -201,6 +237,8 @@ static COUNTERS: Counters = Counters::new();
 static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static WORKER: OnceLock<Thread> = OnceLock::new();
 static START: OnceLock<Instant> = OnceLock::new();
+// one choice at a time, so a quick on and off reach the files in order
+static CHOICE: Mutex<()> = Mutex::new(());
 
 thread_local! {
     static MAIN: Cell<bool> = const { Cell::new(false) };
@@ -240,7 +278,7 @@ impl Drop for Span {
             return;
         }
         COUNTERS.phase.store(self.previous, Relaxed);
-        if COUNTERS.enabled.load(Relaxed) {
+        if COUNTERS.enabled() {
             if let Some(index) = bucket(self.start.elapsed()).and_then(|b| slot(self.phase, b)) {
                 bump(&COUNTERS.slow[index]);
             }
@@ -248,7 +286,10 @@ impl Drop for Span {
     }
 }
 
-// ----- status -----
+// the app has started to quit: a hang from here to the end of cleanup is named as quitting
+pub fn quit_started() {
+    COUNTERS.quitting.store(true, Relaxed);
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
@@ -259,6 +300,12 @@ enum Status {
     InUse,
     Full,
     Unwritable,
+    // the saved record is there but is not one this version can use; left as it is
+    HistoryInvalid,
+    // the saved record could not be read; left as it is
+    HistoryUnreadable,
+    // off, but the last write that closes this launch has not succeeded yet
+    ClosePending,
 }
 
 impl Status {
@@ -269,6 +316,9 @@ impl Status {
             2 => Status::PrefUnreadable,
             3 => Status::InUse,
             4 => Status::Full,
+            6 => Status::HistoryInvalid,
+            7 => Status::HistoryUnreadable,
+            8 => Status::ClosePending,
             _ => Status::Unwritable,
         }
     }
@@ -282,6 +332,9 @@ impl Status {
             Status::InUse => "in_use",
             Status::Full => "disk_full",
             Status::Unwritable => "unwritable",
+            Status::HistoryInvalid => "history_invalid",
+            Status::HistoryUnreadable => "history_unreadable",
+            Status::ClosePending => "close_pending",
         }
     }
 
@@ -298,13 +351,25 @@ impl Status {
             Status::Unwritable
         }
     }
+
+    // what the page is told. recording is only claimed while the policy allows it
+    fn shown(counters: &Counters) -> Status {
+        let stored = Status::from_u8(counters.status.load(Relaxed));
+        let still_off = matches!(
+            stored,
+            Status::Off | Status::PrefUnreadable | Status::ClosePending
+        );
+        if counters.enabled() || still_off {
+            stored
+        } else {
+            Status::Off
+        }
+    }
 }
 
 const PROBLEM_NONE: u8 = 0;
 const PROBLEM_STOP_UNSAVED: u8 = 1;
 const PROBLEM_START_UNSAVED: u8 = 2;
-
-// ----- the record -----
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 enum End {
@@ -333,7 +398,8 @@ enum Kind {
 #[serde(default)]
 struct Event {
     // the launch it belongs to, shown only as how far back it is
-    s: u32,
+    #[serde(alias = "s")]
+    launch: u32,
     kind: Kind,
     phase: Phase,
     // whole seconds in steps of 5
@@ -343,7 +409,7 @@ struct Event {
 impl Default for Event {
     fn default() -> Self {
         Event {
-            s: 0,
+            launch: 0,
             kind: Kind::Other,
             phase: Phase::Unknown,
             secs: 0,
@@ -371,13 +437,15 @@ struct Journal {
     events: Vec<Event>,
 }
 
-// a version or platform string from a file: kept only if it looks like one
+// a version from a file or the build: kept only as three plain numbers, so
+// that nothing a person could have typed or a system filled in passes as one
 fn clean_build(text: &str) -> String {
-    let plain = !text.is_empty()
-        && text.chars().count() <= MAX_BUILD_CHARS
-        && text
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'));
+    let mut parts = text.split('.');
+    let plain = (0..3).all(|_| {
+        parts
+            .next()
+            .is_some_and(|p| (1..=5).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()))
+    }) && parts.next().is_none();
     if plain {
         text.to_string()
     } else {
@@ -408,7 +476,7 @@ impl Journal {
         self.next = self.next.max(top.saturating_add(1)).max(1);
         // events about launches that have been dropped go with them
         if let Some(oldest) = self.sessions.iter().map(|s| s.n).min() {
-            self.events.retain(|e| e.s >= oldest);
+            self.events.retain(|e| e.launch >= oldest);
         }
         if self.events.len() > MAX_EVENTS {
             self.events.drain(..self.events.len() - MAX_EVENTS);
@@ -416,9 +484,9 @@ impl Journal {
     }
 
     fn event(&mut self, kind: Kind, phase: Phase, secs: u32) {
-        let s = self.sessions.last().map_or(0, |s| s.n);
+        let launch = self.sessions.last().map_or(0, |s| s.n);
         self.events.push(Event {
-            s,
+            launch,
             kind,
             phase,
             secs: secs / 5 * 5,
@@ -430,34 +498,46 @@ impl Journal {
 #[derive(Debug, PartialEq)]
 enum Load {
     Missing,
-    Ok,
-    // unreadable, too big, not JSON, or another format: not trusted
-    Bad,
+    Valid(Journal),
+    // too big, not JSON, or another format: not ours to read or to replace
+    Invalid,
+    // the file is there but could not be opened or read
+    Unreadable,
 }
 
-fn load_journal(dir: &Path) -> (Journal, Load) {
+impl Load {
+    // what to count and show when there is nothing usable
+    fn journal(self) -> Journal {
+        match self {
+            Load::Valid(journal) => journal,
+            _ => Journal::fresh(),
+        }
+    }
+}
+
+fn load_journal(dir: &Path) -> Load {
     let file = match File::open(dir.join(JOURNAL)) {
         Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return (Journal::fresh(), Load::Missing)
-        }
-        Err(_) => return (Journal::fresh(), Load::Bad),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Load::Missing,
+        Err(_) => return Load::Unreadable,
     };
     let mut bytes = Vec::new();
     if file
         .take(MAX_JOURNAL_BYTES + 1)
         .read_to_end(&mut bytes)
         .is_err()
-        || bytes.len() as u64 > MAX_JOURNAL_BYTES
     {
-        return (Journal::fresh(), Load::Bad);
+        return Load::Unreadable;
+    }
+    if bytes.len() as u64 > MAX_JOURNAL_BYTES {
+        return Load::Invalid;
     }
     match serde_json::from_slice::<Journal>(&bytes) {
         Ok(mut journal) if journal.v == SCHEMA => {
             journal.sanitize();
-            (journal, Load::Ok)
+            Load::Valid(journal)
         }
-        _ => (Journal::fresh(), Load::Bad),
+        _ => Load::Invalid,
     }
 }
 
@@ -478,8 +558,6 @@ fn write_journal(dir: &Path, journal: &Journal) -> io::Result<()> {
     result
 }
 
-// ----- the preference -----
-
 // the choice lives in a file of its own, apart from config.json: it has to be
 // readable when settings are not, and a second copy of Nudge can change it
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -490,30 +568,67 @@ enum Pref {
     Unreadable,
 }
 
+// the choice is kept inside the folder and also beside it. deleting the folder
+// to start over removes only the first copy, so it cannot turn recording back on.
+// the second copy is named after the folder, so other folders never share it
+fn pref_markers(dir: &Path) -> [PathBuf; 2] {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    [
+        dir.join(OFF_MARKER),
+        dir.with_file_name(format!("{name}.off")),
+    ]
+}
+
+// off if either copy says so; unreadable (not merely absent) fails closed
 fn read_pref(dir: &Path) -> Pref {
-    match fs::symlink_metadata(dir.join(OFF_MARKER)) {
-        Ok(_) => Pref::Off,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Pref::On,
-        Err(_) => Pref::Unreadable,
+    let mut pref = Pref::On;
+    for marker in pref_markers(dir) {
+        match fs::symlink_metadata(marker) {
+            Ok(_) => return Pref::Off,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => pref = Pref::Unreadable,
+        }
     }
+    pref
 }
 
 fn write_pref(dir: &Path, on: bool) -> io::Result<()> {
-    let marker = dir.join(OFF_MARKER);
+    let [inside, beside] = pref_markers(dir);
     if on {
-        match fs::remove_file(&marker) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
-            _ => Ok(()),
+        for marker in [inside, beside] {
+            match fs::remove_file(&marker) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
         }
+        Ok(())
     } else {
-        fs::create_dir_all(dir)?;
-        fs::write(marker, b"off\n")
+        // a choice is saved in both places or not at all, so a failure part way
+        // leaves nothing behind that could be read as a saved Off
+        // a failed write can leave an empty file behind, which reads as Off, so
+        // whatever was started is removed again unless Off was already saved
+        let was_off = inside.is_file() || beside.is_file();
+        let saved = fs::create_dir_all(dir)
+            .and_then(|()| fs::write(&inside, b"off\n"))
+            .and_then(|()| match beside.parent() {
+                Some(parent) => fs::create_dir_all(parent),
+                None => Ok(()),
+            })
+            .and_then(|()| fs::write(&beside, b"off\n"));
+        if let Err(error) = saved {
+            if !was_off {
+                let _ = fs::remove_file(&inside);
+                let _ = fs::remove_file(&beside);
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
-// ----- the lock that makes one process the writer -----
-
-struct Lease(#[allow(dead_code)] File);
+struct Lease {
+    _file: File,
+}
 
 enum LeaseError {
     Busy,
@@ -571,11 +686,26 @@ impl Lease {
             Err(error) => return Err(LeaseError::Io(error)),
         };
         lock(&file)?;
-        Ok(Lease(file))
+        Ok(Lease { _file: file })
     }
 }
 
-// ----- noticing a frozen main thread -----
+// false once the lock file has been deleted, or replaced by another copy's. the
+// folder can be deleted while Nudge runs, and then this launch's lock guards nothing
+#[cfg(unix)]
+fn lease_current(dir: &Path, lease: &Lease) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(dir.join(LEASE)), lease._file.metadata()) {
+        (Ok(path), Ok(held)) => path.dev() == held.dev() && path.ino() == held.ino(),
+        _ => false,
+    }
+}
+
+// on Windows the open lock file cannot be deleted, so it cannot go stale
+#[cfg(not(unix))]
+fn lease_current(_: &Path, _: &Lease) -> bool {
+    true
+}
 
 #[derive(Clone, Copy, Debug)]
 struct Clock {
@@ -598,18 +728,27 @@ enum Seen {
 struct Watch {
     last: Option<Clock>,
     seq: u64,
+    // the probe in flight and when its wait began. a probe already queued on
+    // the main thread cannot be recalled, so it is never replaced before it is answered
     pending: Option<(u64, u64)>,
     grace_until: u64,
     stalled: Option<Phase>,
+    restart: bool,
 }
 
 impl Watch {
-    // forget any probe in flight, so turning recording off and on again
-    // cannot read an old silence as a freeze
+    // forget the silence so far, so turning recording off and on again cannot
+    // read an old silence as a freeze. the probe in flight stays the one to wait for
     fn reset(&mut self) {
         self.last = None;
-        self.pending = None;
         self.stalled = None;
+        self.restart = true;
+    }
+
+    fn rewait(&mut self, since: u64) {
+        if let Some((seq, _)) = self.pending {
+            self.pending = Some((seq, since));
+        }
     }
 
     // returns the probe to post, if any, and what the answer (or its absence) says
@@ -621,11 +760,14 @@ impl Watch {
             // slept or the clock moved: whatever the main thread did, it was not a freeze
             if beat > 1_000 + BEAT_SLACK_MS || (wall - beat as i64).unsigned_abs() > BEAT_SLACK_MS {
                 self.grace_until = now.mono + GRACE_MS;
-                self.pending = None;
+                self.rewait(self.grace_until);
                 self.stalled = None;
             }
         }
         self.last = Some(now);
+        if std::mem::take(&mut self.restart) {
+            self.rewait(now.mono.max(self.grace_until));
+        }
         if now.mono < self.grace_until {
             return (None, Seen::Nothing);
         }
@@ -656,15 +798,22 @@ impl Watch {
     }
 }
 
-// ----- the one process that writes -----
-
 struct Recorder {
     dir: PathBuf,
     counters: &'static Counters,
     build: &'static str,
     lease: Option<Lease>,
     journal: Journal,
+    // this launch has a Running record open
     live: bool,
+    // the launch whose lock was lost while it was live. when the lock is held
+    // again, its record is continued in memory, not restarted, so its counts
+    // and timings are kept and it is not marked as lost
+    own: Option<u32>,
+    // recording went off: the record is closed as Stopped in memory, and
+    // nothing more is collected until that write succeeds
+    closing: bool,
+    close_retry_at: u64,
     dirty: bool,
     base_panics: u32,
     seen_panics: u32,
@@ -672,6 +821,9 @@ struct Recorder {
     saved_slow: [u32; SLOTS],
     saved_at: u64,
     watch: Watch,
+    // tests hold the recorder here, after its reads and before it commits a write
+    #[cfg(test)]
+    gate: Option<Box<dyn Fn() + Send>>,
 }
 
 impl Recorder {
@@ -683,6 +835,9 @@ impl Recorder {
             lease: None,
             journal: Journal::fresh(),
             live: false,
+            own: None,
+            closing: false,
+            close_retry_at: 0,
             dirty: false,
             base_panics: 0,
             seen_panics: 0,
@@ -690,6 +845,8 @@ impl Recorder {
             saved_slow: [0; SLOTS],
             saved_at: 0,
             watch: Watch::default(),
+            #[cfg(test)]
+            gate: None,
         }
     }
 
@@ -698,7 +855,7 @@ impl Recorder {
     }
 
     fn pref(&self) -> Pref {
-        if self.counters.forced_off.load(Relaxed) {
+        if self.counters.off_until_quit.load(Acquire) {
             Pref::Off
         } else {
             read_pref(&self.dir)
@@ -708,18 +865,38 @@ impl Recorder {
     // one beat: follow the preference, record what happened, and say which
     // probe to send the main thread
     fn tick(&mut self, now: Clock) -> Option<u64> {
+        let seen = self.counters.policy.load(Acquire);
         let pref = self.pref();
-        self.counters.enabled.store(pref == Pref::On, Relaxed);
+        // a choice made while the setting was being read wins; read it again next beat
+        let policy = self.counters.adopt(seen, pref == Pref::On)?;
+        // the lock file was deleted or replaced, so nothing more is written under it.
+        // a live launch is continued below if its record is still on disk, and
+        // otherwise a new launch begins. this also covers a lock held without a live
+        // launch, such as after an unusable record
+        if self.lease.as_ref().is_some_and(|lease| !lease_current(&self.dir, lease)) {
+            // the launch is remembered so that begin can continue its record
+            if self.live {
+                self.own = self.journal.sessions.last().map(|s| s.n);
+            }
+            self.live = false;
+            self.closing = false;
+            self.lease = None;
+            self.watch.reset();
+        }
         if pref != Pref::On {
-            self.stop();
-            self.set_status(if pref == Pref::Unreadable {
-                Status::PrefUnreadable
-            } else {
-                Status::Off
-            });
+            if self.stop(now.mono) {
+                self.set_status(if pref == Pref::Unreadable {
+                    Status::PrefUnreadable
+                } else {
+                    Status::Off
+                });
+            }
             return None;
         }
-        if !self.live && !self.begin() {
+        if self.closing && !self.stop(now.mono) {
+            return None;
+        }
+        if !self.live && !self.begin(policy) {
             return None;
         }
 
@@ -731,10 +908,11 @@ impl Recorder {
             self.dirty = true;
         }
 
-        let phase = Phase::from_u8(self.counters.phase.load(Relaxed));
-        let (post, seen) = self
-            .watch
-            .step(now, self.counters.pong.load(Acquire), phase);
+        let (post, seen) = self.watch.step(
+            now,
+            self.counters.answered_probe.load(Acquire),
+            self.counters.current_phase(),
+        );
         match seen {
             Seen::Nothing => {}
             Seen::Stalled(phase) => {
@@ -753,7 +931,7 @@ impl Recorder {
         let timing_changed = self.counters.slow_now() != self.saved_slow_total();
         if self.dirty || (timing_changed && now.mono.saturating_sub(self.saved_at) >= SAVE_EVERY_MS)
         {
-            self.persist(now.mono);
+            self.persist(now.mono, policy);
         }
         post
     }
@@ -789,28 +967,74 @@ impl Recorder {
         });
     }
 
+    // a write that starts or extends this launch's record. it is skipped when a
+    // choice was made since `policy` was read, so an acknowledged off cannot be
+    // followed by a record that off did not see
+    fn commit(&self, journal: &Journal, policy: u32) -> Option<io::Result<()>> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            gate();
+        }
+        let _held = self
+            .counters
+            .commit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // the lock file must still be the one we hold: if the folder was deleted and
+        // another copy has since recorded, writing now would overwrite its record
+        let held = self
+            .lease
+            .as_ref()
+            .is_some_and(|lease| lease_current(&self.dir, lease));
+        (held && self.counters.policy.load(Acquire) == policy).then(|| write_journal(&self.dir, journal))
+    }
+
     // a launch starts: take the lock, settle what earlier launches left
     // behind, and add this one. false while it cannot be done
-    fn begin(&mut self) -> bool {
+    fn begin(&mut self, policy: u32) -> bool {
         if self.lease.is_none() {
             match Lease::acquire(&self.dir) {
                 Ok(lease) => self.lease = Some(lease),
                 Err(error) => {
+                    // another copy holds the lock now, so this launch is no longer ours
+                    if matches!(error, LeaseError::Busy) {
+                        self.own = None;
+                    }
                     self.fail(error);
                     return false;
                 }
             }
         }
-        let (mut journal, load) = load_journal(&self.dir);
-        if load == Load::Bad {
-            let _ = fs::rename(self.dir.join(JOURNAL), self.dir.join(JOURNAL_BAD));
-        }
+        // a record that cannot be read or understood is left exactly as it is:
+        // starting over would replace history that may only be unreachable for now
+        let mut journal = match load_journal(&self.dir) {
+            Load::Missing => Journal::fresh(),
+            Load::Valid(journal) => journal,
+            Load::Invalid => {
+                self.set_status(Status::HistoryInvalid);
+                return false;
+            }
+            Load::Unreadable => {
+                self.set_status(Status::HistoryUnreadable);
+                return false;
+            }
+        };
+        // a launch whose lock was lost while it was recording continues its record
+        // as it was in memory, which holds counts and timings not yet saved
+        // continued only while its record is still on disk. a deleted folder starts
+        // a new launch instead, so nothing from memory is merged into a fresh record
+        let own = self
+            .own
+            .filter(|n| journal.sessions.iter().any(|s| s.n == *n));
+        let mine = own.and_then(|n| self.journal.sessions.iter().find(|s| s.n == n).cloned());
+        // a launch that was closing (recording off, close not yet written) is written as Stopped
+        let closed = mine.as_ref().is_some_and(|s| s.end == End::Stopped);
         // holding the lock means no other launch is alive, so one still marked
-        // Running ended without a recorded quit
+        // Running ended without a recorded quit, except the launch being continued
         let lost: Vec<u32> = journal
             .sessions
             .iter_mut()
-            .filter(|s| s.end == End::Running)
+            .filter(|s| s.end == End::Running && Some(s.n) != own)
             .map(|s| {
                 s.end = End::Lost;
                 s.n
@@ -818,46 +1042,81 @@ impl Recorder {
             .collect();
         for n in lost {
             journal.events.push(Event {
-                s: n,
+                launch: n,
                 kind: Kind::Lost,
                 phase: Phase::Unknown,
                 secs: 0,
             });
         }
-        journal.sessions.push(Session {
-            n: journal.next,
-            build: clean_build(self.build),
-            end: End::Running,
-            slow: vec![0; SLOTS],
-            ..Session::default()
-        });
-        journal.next = journal.next.saturating_add(1);
+        let resumed = match (own, mine) {
+            (Some(n), Some(session)) => {
+                // memory holds every event of this launch, so it replaces the saved set
+                let events: Vec<Event> = self
+                    .journal
+                    .events
+                    .iter()
+                    .filter(|e| e.launch == n)
+                    .cloned()
+                    .collect();
+                journal.events.retain(|e| e.launch != n);
+                journal.events.extend(events);
+                journal.sessions.retain(|s| s.n != n);
+                journal.sessions.push(session);
+                true
+            }
+            _ => {
+                journal.sessions.push(Session {
+                    n: journal.next,
+                    build: clean_build(self.build),
+                    end: End::Running,
+                    slow: vec![0; SLOTS],
+                    ..Session::default()
+                });
+                journal.next = journal.next.saturating_add(1);
+                false
+            }
+        };
         journal.sanitize();
-        if let Err(error) = write_journal(&self.dir, &journal) {
-            self.set_status(Status::of_error(&error));
+        match self.commit(&journal, policy) {
+            // a choice came in while the file was being read: decide again next beat
+            None => return false,
+            Some(Err(error)) => {
+                self.set_status(Status::of_error(&error));
+                return false;
+            }
+            Some(Ok(())) => {}
+        }
+        if resumed && closed {
+            // the Stopped record is saved; this copy lets the lock go and begins
+            // nothing further, so the launch is not reported as lost
+            self.journal = journal;
+            self.own = None;
+            self.lease = None;
+            self.live = false;
+            self.closing = false;
             return false;
         }
         self.journal = journal;
         self.live = true;
+        self.own = None;
         self.dirty = false;
-        self.base_panics = self.counters.panics.load(Relaxed);
-        self.seen_panics = self.base_panics;
-        self.base_slow = self.counters.slow_now();
-        self.saved_slow = [0; SLOTS];
+        // a continued launch keeps the baselines its counts are measured from
+        if !resumed {
+            self.base_panics = self.counters.panics.load(Relaxed);
+            self.seen_panics = self.base_panics;
+            self.base_slow = self.counters.slow_now();
+            self.saved_slow = [0; SLOTS];
+        }
         self.watch.reset();
         self.set_status(Status::Recording);
         true
     }
 
-    // write the record, unless the preference changed since the last beat
-    fn persist(&mut self, mono: u64) {
-        if self.pref() != Pref::On {
-            self.stop();
-            return;
-        }
+    fn persist(&mut self, mono: u64, policy: u32) {
         self.sync_session();
-        match write_journal(&self.dir, &self.journal) {
-            Ok(()) => {
+        match self.commit(&self.journal, policy) {
+            None => {}
+            Some(Ok(())) => {
                 self.dirty = false;
                 self.saved_at = mono;
                 self.saved_slow = self.journal.sessions.last().map_or([0; SLOTS], |s| {
@@ -868,24 +1127,54 @@ impl Recorder {
                 self.set_status(Status::Recording);
             }
             // kept in memory and tried again on the next beat
-            Err(error) => self.set_status(Status::of_error(&error)),
+            Some(Err(error)) => self.set_status(Status::of_error(&error)),
         }
     }
 
-    // recording stops: this launch is closed as Stopped with one last write,
-    // which saves the timings gathered since the last save, and the lock is let go
-    // so another copy can take over
-    fn stop(&mut self) {
+    // freeze this launch's counts as Stopped; the write comes after
+    fn mark_stopped(&mut self, mono: u64) {
+        if self.closing {
+            return;
+        }
+        self.sync_session();
+        if let Some(session) = self.journal.sessions.last_mut() {
+            session.end = End::Stopped;
+        }
+        self.closing = true;
+        self.close_retry_at = mono;
+    }
+
+    fn close(&mut self) -> io::Result<()> {
+        if !self.lease.as_ref().is_some_and(|lease| lease_current(&self.dir, lease)) {
+            return Err(io::Error::other("the lock file is no longer this copy's"));
+        }
+        write_journal(&self.dir, &self.journal)?;
+        self.live = false;
+        self.closing = false;
+        Ok(())
+    }
+
+    // recording is off: close this launch as Stopped with one last write, which
+    // saves the timings gathered since the last save, and let the lock go so
+    // another copy can take over. while that write fails the launch stays ours
+    // (lock kept, nothing new collected) and the write is tried again every
+    // CLOSE_RETRY_MS. true once nothing is left to close
+    fn stop(&mut self, mono: u64) -> bool {
         self.watch.reset();
+        self.own = None;
         if self.live {
-            self.live = false;
-            self.sync_session();
-            if let Some(session) = self.journal.sessions.last_mut() {
-                session.end = End::Stopped;
+            self.mark_stopped(mono);
+            if mono < self.close_retry_at {
+                return false;
             }
-            let _ = write_journal(&self.dir, &self.journal);
+            if self.close().is_err() {
+                self.close_retry_at = mono.saturating_add(CLOSE_RETRY_MS);
+                self.set_status(Status::ClosePending);
+                return false;
+            }
         }
         self.lease = None;
+        true
     }
 
     // the app is returning from its event loop: close this launch as clean
@@ -893,9 +1182,13 @@ impl Recorder {
         if !self.live {
             return Ok(());
         }
-        if self.pref() != Pref::On {
-            self.stop();
+        // the record is no longer this copy's to write, so it is left as the other copy has it
+        if !self.lease.as_ref().is_some_and(|lease| lease_current(&self.dir, lease)) {
             return Ok(());
+        }
+        if self.closing || self.pref() != Pref::On {
+            self.mark_stopped(0);
+            return self.close();
         }
         self.sync_session();
         if let Some(session) = self.journal.sessions.last_mut() {
@@ -906,8 +1199,6 @@ impl Recorder {
         Ok(())
     }
 }
-
-// ----- the report -----
 
 struct Totals {
     panics: u64,
@@ -930,8 +1221,9 @@ fn totals(journal: &Journal) -> Totals {
 }
 
 // the text a person reviews and may copy. built only from numbers and fixed
-// labels, so nothing in the file can reach it as text
-fn render_report(journal: &Journal, recording: bool, build: &str) -> String {
+// labels, so nothing in the file can reach it as text. `saved` says why the
+// counts are empty when the saved record could not be used
+fn render_report(journal: &Journal, recording: bool, build: &str, saved: Option<&str>) -> String {
     let t = totals(journal);
     let mut out = String::new();
     let _ = writeln!(out, "Nudge diagnostics report (format {SCHEMA})");
@@ -947,6 +1239,9 @@ fn render_report(journal: &Journal, recording: bool, build: &str) -> String {
         "Recording now: {}",
         if recording { "yes" } else { "no" }
     );
+    if let Some(saved) = saved {
+        let _ = writeln!(out, "Saved record: {saved}");
+    }
     let _ = writeln!(
         out,
         "Launches in this report: {} (at most {MAX_SESSIONS} are kept)",
@@ -1015,7 +1310,7 @@ fn render_report(journal: &Journal, recording: bool, build: &str) -> String {
         out.push_str("- none recorded\n");
     }
     for event in &journal.events {
-        let ago = match latest.saturating_sub(event.s) {
+        let ago = match latest.saturating_sub(event.launch) {
             0 => "latest launch".to_string(),
             1 => "1 launch earlier".to_string(),
             n => format!("{n} launches earlier"),
@@ -1038,8 +1333,6 @@ fn render_report(journal: &Journal, recording: bool, build: &str) -> String {
     out
 }
 
-// ----- the page's side -----
-
 #[derive(Serialize)]
 pub struct View {
     // the choice, as far as this copy of Nudge can tell
@@ -1058,15 +1351,14 @@ fn dir() -> Option<&'static Path> {
 }
 
 fn recording_now() -> bool {
-    COUNTERS.enabled.load(Relaxed)
-        && Status::from_u8(COUNTERS.status.load(Relaxed)) == Status::Recording
+    Status::shown(&COUNTERS) == Status::Recording
 }
 
 fn make_view(journal: &Journal, counters: &Counters) -> View {
     let t = totals(journal);
     View {
-        keep: counters.enabled.load(Relaxed),
-        status: Status::from_u8(counters.status.load(Relaxed)).code(),
+        keep: counters.enabled(),
+        status: Status::shown(counters).code(),
         problem: match counters.problem.load(Relaxed) {
             PROBLEM_STOP_UNSAVED => Some("stop_unsaved"),
             PROBLEM_START_UNSAVED => Some("start_unsaved"),
@@ -1079,44 +1371,69 @@ fn make_view(journal: &Journal, counters: &Counters) -> View {
     }
 }
 
+fn load_here() -> Load {
+    dir().map_or(Load::Missing, load_journal)
+}
+
 fn view() -> View {
-    let journal = dir()
-        .map(|d| load_journal(d).0)
-        .unwrap_or_else(Journal::fresh);
-    make_view(&journal, &COUNTERS)
+    make_view(&load_here().journal(), &COUNTERS)
 }
 
 fn report() -> String {
-    let journal = dir()
-        .map(|d| load_journal(d).0)
-        .unwrap_or_else(Journal::fresh);
-    render_report(&journal, recording_now(), env!("CARGO_PKG_VERSION"))
+    let load = load_here();
+    let saved = match load {
+        Load::Invalid => {
+            Some("not in a form this version of Nudge can read, so the counts below are empty")
+        }
+        Load::Unreadable => Some("could not be read, so the counts below are empty"),
+        _ => None,
+    };
+    render_report(
+        &load.journal(),
+        recording_now(),
+        env!("CARGO_PKG_VERSION"),
+        saved,
+    )
 }
 
-// turn recording on or off. off takes effect here at once even when the choice
-// cannot be saved, and then stays off until quit; on only counts once saved
+// switching off gates the hooks before anything else, then waits a moment for
+// a record write already under way, then saves the choice. a choice that
+// cannot be saved still stops recording, until quit. switching on only counts
+// once it is saved
 fn apply_choice(dir: Option<&Path>, counters: &Counters, on: bool) {
-    let saved = match dir {
+    let _alone = CHOICE.lock().unwrap_or_else(PoisonError::into_inner);
+    let saved = |on| match dir {
         Some(dir) => write_pref(dir, on),
         None => Err(io::Error::from(io::ErrorKind::NotFound)),
     };
-    match (on, saved) {
-        (true, Ok(())) => {
-            counters.forced_off.store(false, Relaxed);
-            counters.problem.store(PROBLEM_NONE, Relaxed);
-            counters.enabled.store(true, Relaxed);
-        }
-        (true, Err(_)) => counters.problem.store(PROBLEM_START_UNSAVED, Relaxed),
-        (false, saved) => {
-            counters.enabled.store(false, Relaxed);
-            counters.status.store(Status::Off as u8, Relaxed);
-            if saved.is_err() {
-                counters.forced_off.store(true, Relaxed);
-                counters.problem.store(PROBLEM_STOP_UNSAVED, Relaxed);
-            } else {
+    if on {
+        match saved(true) {
+            Ok(()) => {
+                counters.off_until_quit.store(false, Release);
                 counters.problem.store(PROBLEM_NONE, Relaxed);
+                counters.choose(true);
             }
+            Err(_) => counters.problem.store(PROBLEM_START_UNSAVED, Relaxed),
         }
+        return;
+    }
+    counters.off_until_quit.store(true, Release);
+    counters.choose(false);
+    let until = Instant::now() + COMMIT_WAIT;
+    loop {
+        match counters.commit.try_lock() {
+            Err(TryLockError::WouldBlock) if Instant::now() < until => {
+                std::thread::sleep(Duration::from_millis(5))
+            }
+            _ => break,
+        }
+    }
+    match saved(false) {
+        Ok(()) => {
+            counters.off_until_quit.store(false, Release);
+            counters.problem.store(PROBLEM_NONE, Relaxed);
+        }
+        Err(_) => counters.problem.store(PROBLEM_STOP_UNSAVED, Relaxed),
     }
 }
 
@@ -1145,8 +1462,6 @@ pub async fn review_diagnostics() -> String {
     report()
 }
 
-// ----- starting, watching and ending -----
-
 fn clock() -> Clock {
     let start = *START.get_or_init(Instant::now);
     Clock {
@@ -1165,7 +1480,7 @@ pub fn init(data_dir: Option<PathBuf>) {
     let dir = data_dir.map(|d| d.join("diagnostics"));
     if let Some(dir) = &dir {
         let pref = read_pref(dir);
-        COUNTERS.enabled.store(pref == Pref::On, Relaxed);
+        COUNTERS.choose(pref == Pref::On);
         if pref != Pref::On {
             let status = if pref == Pref::Unreadable {
                 Status::PrefUnreadable
@@ -1195,11 +1510,11 @@ fn install_panic_hook() {
 }
 
 fn observe_panic() {
-    if !COUNTERS.enabled.load(Relaxed) {
+    if !COUNTERS.enabled() {
         return;
     }
     let phase = if on_main() {
-        COUNTERS.phase.load(Relaxed)
+        COUNTERS.current_phase() as u8
     } else {
         BACKGROUND
     };
@@ -1234,7 +1549,9 @@ fn worker(app: tauri::AppHandle, dir: PathBuf) {
     loop {
         if let Some(seq) = recorder.tick(clock()) {
             // answered by the main thread whenever it next runs events
-            let _ = app.run_on_main_thread(move || COUNTERS.pong.store(seq, Release));
+            let _ = app.run_on_main_thread(move || {
+                COUNTERS.answered_probe.fetch_max(seq, Release);
+            });
         }
         if COUNTERS.clean_requested.load(Acquire) {
             let ok = recorder.finish_clean().is_ok();
@@ -1357,9 +1674,16 @@ mod tests {
         Box::leak(Box::new(Counters::new()))
     }
 
+    fn off_on_disk(dir: &Path) -> bool {
+        pref_markers(dir).iter().all(|marker| marker.exists())
+    }
+
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("nudge-diag-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
+        for marker in pref_markers(&dir) {
+            let _ = fs::remove_file(marker);
+        }
         dir
     }
 
@@ -1375,7 +1699,7 @@ mod tests {
     }
 
     fn disk(dir: &Path) -> Journal {
-        load_journal(dir).0
+        load_journal(dir).journal()
     }
 
     // beat once a second until `until`, answering every probe like a healthy main thread
@@ -1383,7 +1707,7 @@ mod tests {
         let mut t = from;
         while t <= until {
             if let Some(seq) = rec.tick(at(t)) {
-                rec.counters.pong.store(seq, Release);
+                rec.counters.answered_probe.store(seq, Release);
             }
             t += 1_000;
         }
@@ -1407,7 +1731,7 @@ mod tests {
         assert_eq!(during.events.last().unwrap().phase, Phase::TrayMenu);
         rec.tick(at(9_000));
         assert_eq!(disk(&dir).sessions[0].stalls, 1, "one freeze is one stall");
-        rec.counters.pong.store(1, Release);
+        rec.counters.answered_probe.store(1, Release);
         assert_eq!(rec.tick(at(10_000)), Some(2));
         let after = disk(&dir);
         let last = after.events.last().unwrap();
@@ -1431,6 +1755,108 @@ mod tests {
     }
 
     #[test]
+    fn deleting_the_folder_while_running_starts_a_fresh_launch_and_never_writes_the_old_one() {
+        let dir = temp("deleted-while-running");
+        let mut rec = recorder(&dir);
+        run_healthy(&mut rec, 0, 10_000);
+        assert!(rec.live);
+        fs::remove_dir_all(&dir).unwrap();
+        // the next beat finds the lock file gone, so this launch ends and a new one begins
+        rec.tick(at(20_000));
+        assert!(rec.live);
+        let journal = disk(&dir);
+        assert_eq!(journal.sessions.len(), 1, "only the new launch is recorded");
+        assert_eq!(journal.sessions[0].end, End::Running);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_the_folder_while_the_record_is_unusable_recovers_without_a_relaunch() {
+        let dir = temp("deleted-unusable");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(JOURNAL), b"not a record").unwrap();
+        let mut rec = recorder(&dir);
+        assert_eq!(rec.tick(at(0)), None);
+        assert!(!rec.live);
+        assert_eq!(
+            Status::from_u8(rec.counters.status.load(Relaxed)),
+            Status::HistoryInvalid
+        );
+        // the lock is still held, so deleting the folder must not leave it stranded
+        fs::remove_dir_all(&dir).unwrap();
+        rec.tick(at(1_000));
+        assert!(rec.live);
+        let journal = disk(&dir);
+        assert_eq!(journal.sessions.len(), 1, "a new launch is recorded");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_only_the_lock_file_keeps_the_running_launch_and_its_counts() {
+        let dir = temp("deleted-lock-only");
+        let mut rec = recorder(&dir);
+        run_healthy(&mut rec, 0, 10_000);
+        let launch = rec.journal.sessions.last().unwrap().n;
+        fs::remove_file(dir.join(LEASE)).unwrap();
+        rec.tick(at(20_000));
+        assert!(rec.live);
+        let journal = disk(&dir);
+        assert_eq!(journal.sessions.len(), 1, "the launch is continued, not restarted");
+        assert_eq!(journal.sessions[0].n, launch);
+        assert_eq!(journal.sessions[0].end, End::Running);
+        assert!(
+            !journal.events.iter().any(|e| e.kind == Kind::Lost),
+            "a launch that is still running is not reported as lost"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_folder_starts_a_new_launch_without_the_old_events() {
+        let dir = temp("deleted-events");
+        let mut rec = recorder(&dir);
+        run_healthy(&mut rec, 0, 10_000);
+        let launch = rec.journal.sessions.last().unwrap().n;
+        rec.journal.event(Kind::Stall, Phase::TrayMenu, 5);
+        rec.dirty = true;
+        rec.tick(at(10_500));
+        fs::remove_dir_all(&dir).unwrap();
+        rec.tick(at(20_000));
+        assert!(rec.live);
+        let journal = disk(&dir);
+        assert_eq!(journal.sessions.len(), 1, "only the new launch is saved");
+        assert_eq!(journal.sessions[0].end, End::Running);
+        assert!(
+            !journal.events.iter().any(|e| e.kind == Kind::Stall),
+            "the old launch's events went with its folder"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_choice_that_cannot_be_saved_in_both_places_leaves_neither_behind() {
+        let dir = temp("half-saved");
+        let beside = pref_markers(&dir)[1].clone();
+        // a folder where the second copy of the choice has to go makes its write fail
+        fs::create_dir_all(&beside).unwrap();
+        assert!(write_pref(&dir, false).is_err());
+        assert!(!pref_markers(&dir)[0].exists(), "no half-saved Off is left to be read");
+        fs::remove_dir_all(&beside).unwrap();
+    }
+
+    #[test]
+    fn deleting_the_folder_does_not_turn_recording_back_on() {
+        let dir = temp("deleted-while-off");
+        fs::create_dir_all(&dir).unwrap();
+        write_pref(&dir, false).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(read_pref(&dir), Pref::Off);
+        // only turning it on, through the choice itself, lets recording start again
+        write_pref(&dir, true).unwrap();
+        assert_eq!(read_pref(&dir), Pref::On);
+    }
+
+    #[test]
     fn sleep_or_a_paused_process_is_not_a_freeze() {
         // the computer sleeps for ten minutes: the wall clock jumps, the steady one does not
         let dir = temp("sleep");
@@ -1451,12 +1877,13 @@ mod tests {
             assert_eq!(rec.tick(now), None, "no probe during grace");
         }
         assert_eq!(disk(&dir).sessions[0].stalls, 0);
-        // a probe after the grace period that nobody answers is a real freeze
+        // the probe sent before sleep is still the one waited for, so no second one is
+        // queued; if nobody answers it by the end of the grace period plus 5 seconds, that is a real freeze
         let after = |t: u64| Clock {
             mono: t,
             wall: woke.wall + (t - 2_000),
         };
-        assert_eq!(rec.tick(after(14_000)), Some(2));
+        assert_eq!(rec.tick(after(14_000)), None);
         for t in 15_000..=19_000 {
             if t % 1_000 == 0 {
                 rec.tick(after(t));
@@ -1489,11 +1916,15 @@ mod tests {
         write_pref(&dir, true).unwrap();
         assert_eq!(
             rec.tick(at(62_000)),
-            Some(2),
-            "a fresh probe, not the old one"
+            None,
+            "the probe from before is still the one waited for, not a second one"
         );
         rec.tick(at(63_000));
+        rec.tick(at(66_000));
         assert_eq!(disk(&dir).sessions.iter().map(|s| s.stalls).sum::<u32>(), 0);
+        // its wait began again when recording did, so it is a freeze 5 seconds after that
+        rec.tick(at(67_000));
+        assert_eq!(disk(&dir).sessions.iter().map(|s| s.stalls).sum::<u32>(), 1);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1555,6 +1986,8 @@ mod tests {
         write_pref(&dir, false).unwrap();
         assert_eq!(read_pref(&dir), Pref::Off);
         fs::remove_dir_all(&dir).unwrap();
+        // the choice outlives the folder, so clear it to start the next case clean
+        write_pref(&dir, true).unwrap();
 
         // a file where the folder should be: the marker can be neither found nor ruled out
         fs::write(&dir, "not a folder").unwrap();
@@ -1565,7 +1998,7 @@ mod tests {
             Status::from_u8(rec.counters.status.load(Relaxed)),
             Status::PrefUnreadable
         );
-        assert!(!rec.counters.enabled.load(Relaxed));
+        assert!(!rec.counters.enabled());
         fs::remove_file(&dir).unwrap();
     }
 
@@ -1575,8 +2008,8 @@ mod tests {
         fs::write(&dir, "in the way").unwrap();
         let c = counters();
         apply_choice(Some(&dir), c, false);
-        assert!(!c.enabled.load(Relaxed));
-        assert!(c.forced_off.load(Relaxed));
+        assert!(!c.enabled());
+        assert!(c.off_until_quit.load(Relaxed));
         assert_eq!(
             make_view(&Journal::fresh(), c).problem,
             Some("stop_unsaved")
@@ -1590,7 +2023,7 @@ mod tests {
             make_view(&Journal::fresh(), c).problem,
             Some("start_unsaved")
         );
-        assert!(!c.enabled.load(Relaxed), "on counts only once it is saved");
+        assert!(!c.enabled(), "on counts only once it is saved");
         apply_choice(None, c, false);
         assert_eq!(
             make_view(&Journal::fresh(), c).problem,
@@ -1602,11 +2035,9 @@ mod tests {
         let ok = temp("saved");
         let c = counters();
         apply_choice(Some(&ok), c, false);
-        assert!(
-            ok.join(OFF_MARKER).exists() && !c.enabled.load(Relaxed) && !c.forced_off.load(Relaxed)
-        );
+        assert!(off_on_disk(&ok) && !c.enabled() && !c.off_until_quit.load(Relaxed));
         apply_choice(Some(&ok), c, true);
-        assert!(!ok.join(OFF_MARKER).exists() && c.enabled.load(Relaxed));
+        assert!(!off_on_disk(&ok) && c.enabled());
         let view = make_view(&Journal::fresh(), c);
         assert!(view.keep && view.problem.is_none());
         fs::remove_dir_all(&ok).unwrap();
@@ -1695,7 +2126,7 @@ mod tests {
         assert!(journal
             .events
             .iter()
-            .any(|e| e.kind == Kind::Lost && e.s == journal.sessions[1].n));
+            .any(|e| e.kind == Kind::Lost && e.launch == journal.sessions[1].n));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1711,7 +2142,10 @@ mod tests {
         assert_eq!(journal.sessions.len(), MAX_SESSIONS);
         assert!(journal.events.len() <= MAX_EVENTS);
         assert!(
-            journal.events.iter().all(|e| e.s >= journal.sessions[0].n),
+            journal
+                .events
+                .iter()
+                .all(|e| e.launch >= journal.sessions[0].n),
             "no event outlives its launch"
         );
         assert!(fs::metadata(dir.join(JOURNAL)).unwrap().len() < MAX_JOURNAL_BYTES / 4);
@@ -1743,7 +2177,9 @@ mod tests {
         journal.sanitize();
         let t = totals(&journal);
         assert_eq!(t.panics, 3 * u64::from(u32::MAX));
-        assert!(render_report(&journal, false, "1.0").contains(&format!("Panics: {}", t.panics)));
+        assert!(
+            render_report(&journal, false, "1.0", None).contains(&format!("Panics: {}", t.panics))
+        );
     }
 
     #[test]
@@ -1757,10 +2193,11 @@ mod tests {
             "events":[{"s":7,"kind":"Shell","phase":"RmRf","secs":99999,"text":"/etc/passwd"},
             {"s":99,"kind":"Stall","phase":"TrayMenu","secs":61}]}"#;
         fs::write(dir.join(JOURNAL), hostile).unwrap();
-        let (journal, load) = load_journal(&dir);
-        assert_eq!(load, Load::Ok);
+        let Load::Valid(journal) = load_journal(&dir) else {
+            panic!("a file that parses is read, then held to the limits");
+        };
         assert!(journal.sessions.iter().all(|s| s.slow.len() == SLOTS));
-        let text = render_report(&journal, true, "1.0.7");
+        let text = render_report(&journal, true, "1.0.7", None);
         for forbidden in [
             "alice", "Users", "/", "\\", "@", "secret", "passwd", "mum", "\u{1b}", "Exploded",
             "RmRf",
@@ -1778,16 +2215,30 @@ mod tests {
         assert!(text.contains("Versions: unknown"));
         assert!(text.contains("Unclean exits (no normal quit was recorded, cause unknown): 1"));
 
-        // too big to be ours: set aside, and recording starts from nothing
+        // too big to be ours: left exactly as it is, and recording does not start over it
         let big = format!("{}{}", " ".repeat(MAX_JOURNAL_BYTES as usize), r#"{"v":1}"#);
         fs::write(dir.join(JOURNAL), &big).unwrap();
-        assert_eq!(load_journal(&dir).1, Load::Bad);
+        assert_eq!(load_journal(&dir), Load::Invalid);
         let mut rec = recorder(&dir);
-        rec.tick(at(0));
-        assert_eq!(fs::read(dir.join(JOURNAL_BAD)).unwrap().len(), big.len());
-        assert_eq!(disk(&dir).sessions.len(), 1);
+        assert_eq!(rec.tick(at(0)), None);
+        assert!(!rec.live);
+        assert_eq!(
+            Status::from_u8(rec.counters.status.load(Relaxed)),
+            Status::HistoryInvalid
+        );
+        assert_eq!(fs::read(dir.join(JOURNAL)).unwrap(), big.as_bytes());
+        let mut names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [JOURNAL, LEASE],
+            "no copy, no rename, no temporary file"
+        );
 
-        // not JSON, and a format from some other version, are set aside too
+        // not JSON, and a format from some other version, are not read either
         for text in [
             "{ not json",
             r#"{"v":2,"sessions":[]}"#,
@@ -1795,7 +2246,7 @@ mod tests {
             r#"{"sessions":[]}"#,
         ] {
             fs::write(dir.join(JOURNAL), text).unwrap();
-            assert_eq!(load_journal(&dir).1, Load::Bad, "{text:?}");
+            assert_eq!(load_journal(&dir), Load::Invalid, "{text:?}");
         }
         // deep nesting is refused by the parser, not recursed into
         fs::write(
@@ -1803,8 +2254,9 @@ mod tests {
             format!("{}{}", "[".repeat(5000), "]".repeat(5000)),
         )
         .unwrap();
-        assert_eq!(load_journal(&dir).1, Load::Bad);
+        assert_eq!(load_journal(&dir), Load::Invalid);
         fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(load_journal(&dir), Load::Missing);
     }
 
     #[test]
@@ -1880,7 +2332,7 @@ mod tests {
     fn slow_steps_are_counted_by_length_and_only_while_recording() {
         let _guard = GLOBAL.lock().unwrap();
         MAIN.with(|m| m.set(true));
-        COUNTERS.enabled.store(true, Relaxed);
+        COUNTERS.choose(true);
         let index = slot(Phase::ConfigSave, 0).unwrap();
         let before = COUNTERS.slow[index].load(Relaxed);
         {
@@ -1905,7 +2357,7 @@ mod tests {
             let _quick = span(Phase::ConfigSave);
         }
         assert_eq!(COUNTERS.slow[index].load(Relaxed), before + 1);
-        COUNTERS.enabled.store(false, Relaxed);
+        COUNTERS.choose(false);
         {
             let _off = span(Phase::ConfigSave);
             std::thread::sleep(Duration::from_millis(130));
@@ -1915,7 +2367,7 @@ mod tests {
             before + 1,
             "nothing counted while off"
         );
-        COUNTERS.enabled.store(true, Relaxed);
+        COUNTERS.choose(true);
         // off the main thread a span times and names nothing
         MAIN.with(|m| m.set(false));
         {
@@ -1944,7 +2396,7 @@ mod tests {
         );
         run_healthy(&mut rec, 21_000, 40_000);
         assert_eq!(disk(&dir).sessions[0].slow[a], 2);
-        let text = render_report(&disk(&dir), true, "1.2.3");
+        let text = render_report(&disk(&dir), true, "1.2.3", None);
         assert!(text.contains("- opening Settings: 1 to 5 s x2"), "{text}");
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1955,7 +2407,7 @@ mod tests {
         let dir = temp("panic");
         let secret = "SENTINEL-alice /Users/alice/reminder-call-mum.txt";
         install_panic_hook();
-        COUNTERS.enabled.store(true, Relaxed);
+        COUNTERS.choose(true);
         let before = COUNTERS.panics.load(Relaxed);
         let result = std::thread::Builder::new()
             .name("worker-of-alice".into())
@@ -1980,7 +2432,7 @@ mod tests {
         }
         assert_eq!(disk(&dir).sessions[0].panics, 1);
         assert!(text.contains("Panics: 1"));
-        COUNTERS.enabled.store(false, Relaxed);
+        COUNTERS.choose(false);
         let _ = std::thread::spawn(|| panic!("while off")).join();
         assert_eq!(
             COUNTERS.panics.load(Relaxed),
@@ -1991,7 +2443,7 @@ mod tests {
     }
 
     fn report_of(dir: &Path) -> String {
-        render_report(&load_journal(dir).0, true, "1.2.3")
+        render_report(&load_journal(dir).journal(), true, "1.2.3", None)
     }
 
     #[test]
@@ -2080,9 +2532,432 @@ mod tests {
 
     #[test]
     fn a_stale_view_without_a_folder_is_empty_not_an_error() {
-        let t = totals(&load_journal(&temp("nothing")).0);
+        let t = totals(&load_journal(&temp("nothing")).journal());
         assert_eq!((t.panics, t.stalls, t.unclean, t.launches), (0, 0, 0, 0));
-        let text = render_report(&Journal::fresh(), false, "1.0.7");
+        let text = render_report(&Journal::fresh(), false, "1.0.7", None);
         assert!(text.contains("Recording now: no") && text.contains("Panics: 0"));
+    }
+
+    // runs one beat on another thread and holds it just before it commits a
+    // write; `during` runs while it is held
+    fn held_beat(mut rec: Recorder, during: impl FnOnce()) -> Recorder {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        rec.gate = Some(Box::new(move || {
+            let _ = entered_tx.send(());
+            let _ = release_rx.recv();
+        }));
+        let beat = std::thread::spawn(move || {
+            rec.tick(at(1_000));
+            rec
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the beat reached its write");
+        during();
+        drop(release_tx);
+        let mut rec = beat.join().unwrap();
+        rec.gate = None;
+        rec
+    }
+
+    // a path where a file stands in the way of the preference file
+    fn unsavable(name: &str) -> PathBuf {
+        let path = temp(name);
+        fs::write(&path, "in the way").unwrap();
+        path
+    }
+
+    #[test]
+    fn an_off_choice_made_while_a_launch_starts_stops_it_from_starting() {
+        for saved in [true, false] {
+            let dir = temp("start-off");
+            let blocked = unsavable("start-off-elsewhere");
+            let c = counters();
+            let rec = held_beat(Recorder::new(dir.clone(), c, "1.2.3"), || {
+                apply_choice(Some(if saved { &dir } else { &blocked }), c, false)
+            });
+            assert!(!rec.live && !c.enabled());
+            assert_eq!(
+                load_journal(&dir),
+                Load::Missing,
+                "no launch was written (saved: {saved})"
+            );
+            assert_eq!(Status::shown(c), Status::Off, "not the stale Recording");
+            assert_eq!(c.problem.load(Relaxed) == PROBLEM_STOP_UNSAVED, !saved);
+
+            // and it stays that way on the beats after, saved or not
+            let mut rec = rec;
+            for t in [2_000, 3_000] {
+                assert_eq!(rec.tick(at(t)), None);
+            }
+            assert!(!rec.live);
+            assert_eq!(load_journal(&dir), Load::Missing);
+            assert_eq!(Status::shown(c), Status::Off);
+            assert_eq!(off_on_disk(&dir), saved);
+
+            if saved {
+                apply_choice(Some(&dir), c, true);
+                rec.tick(at(4_000));
+                assert!(rec.live);
+                assert_eq!(Status::shown(c), Status::Recording);
+                assert_eq!(disk(&dir).sessions.len(), 1);
+            }
+            fs::remove_dir_all(&dir).unwrap();
+            let _ = fs::remove_file(&blocked);
+        }
+    }
+
+    #[test]
+    fn an_off_choice_made_during_a_record_write_is_not_undone_by_it() {
+        for saved in [true, false] {
+            let dir = temp("write-off");
+            let blocked = unsavable("write-off-elsewhere");
+            let c = counters();
+            let mut rec = Recorder::new(dir.clone(), c, "1.2.3");
+            rec.tick(at(0));
+            let before = fs::read(dir.join(JOURNAL)).unwrap();
+            // a stall noticed in memory, waiting for its write
+            rec.journal.sessions.last_mut().unwrap().stalls = 1;
+            rec.journal.event(Kind::Stall, Phase::TrayMenu, 5);
+            rec.dirty = true;
+
+            let mut rec = held_beat(rec, || {
+                apply_choice(Some(if saved { &dir } else { &blocked }), c, false)
+            });
+            assert_eq!(
+                fs::read(dir.join(JOURNAL)).unwrap(),
+                before,
+                "nothing new is written once off was chosen (saved: {saved})"
+            );
+            assert!(rec.dirty);
+            assert_eq!(Status::shown(c), Status::Off);
+
+            // the next beat closes the launch with what was gathered before off
+            assert_eq!(rec.tick(at(2_000)), None);
+            let journal = disk(&dir);
+            assert_eq!(journal.sessions[0].end, End::Stopped);
+            assert_eq!(journal.sessions[0].stalls, 1);
+            assert_eq!(Status::shown(c), Status::Off);
+            assert!(Lease::acquire(&dir).is_ok(), "the lock was let go");
+            fs::remove_dir_all(&dir).unwrap();
+            let _ = fs::remove_file(&blocked);
+        }
+    }
+
+    #[test]
+    fn a_reading_taken_before_a_choice_cannot_undo_it() {
+        let c = counters();
+        let before = c.policy.load(Acquire);
+        c.choose(false);
+        assert_eq!(c.adopt(before, true), None, "the stale reading is dropped");
+        assert!(!c.enabled());
+        let now = c.policy.load(Acquire);
+        assert!(c.adopt(now, true).is_some(), "a current reading counts");
+        assert!(c.enabled());
+        c.choose(false);
+        assert!(!c.enabled());
+        c.choose(true);
+        assert!(c.enabled());
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_read_is_left_alone_and_recording_waits() {
+        let dir = temp("unreadable-history");
+        let mut first = recorder(&dir);
+        run_healthy(&mut first, 0, 1_000);
+        first.finish_clean().unwrap();
+        drop(first);
+        let good = fs::read(dir.join(JOURNAL)).unwrap();
+
+        // a folder where the file belongs: it opens, and cannot be read
+        fs::rename(dir.join(JOURNAL), dir.join("kept")).unwrap();
+        fs::create_dir(dir.join(JOURNAL)).unwrap();
+        assert_eq!(load_journal(&dir), Load::Unreadable);
+        let mut rec = recorder(&dir);
+        assert_eq!(rec.tick(at(0)), None);
+        assert!(!rec.live);
+        assert_eq!(
+            Status::from_u8(rec.counters.status.load(Relaxed)),
+            Status::HistoryUnreadable
+        );
+        assert!(dir.join(JOURNAL).is_dir(), "not renamed, not replaced");
+        let mut names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, [JOURNAL, "kept", LEASE]);
+
+        // once it can be read again, recording starts and the earlier launch is still there
+        fs::remove_dir(dir.join(JOURNAL)).unwrap();
+        fs::rename(dir.join("kept"), dir.join(JOURNAL)).unwrap();
+        rec.tick(at(1_000));
+        assert!(rec.live);
+        let journal = disk(&dir);
+        assert_eq!(
+            journal.sessions.iter().map(|s| s.end).collect::<Vec<_>>(),
+            vec![End::Clean, End::Running]
+        );
+        drop(rec);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = dir.join(JOURNAL);
+            let saved = fs::read(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+            // a user who can read anyway (root) cannot show this
+            if File::open(&path).is_err() {
+                assert_eq!(load_journal(&dir), Load::Unreadable);
+                let mut rec = recorder(&dir);
+                assert_eq!(rec.tick(at(0)), None);
+                assert_eq!(
+                    Status::from_u8(rec.counters.status.load(Relaxed)),
+                    Status::HistoryUnreadable
+                );
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+                assert_eq!(fs::read(&path).unwrap(), saved, "the record is as it was");
+                assert!(!dir.join("journal.bad").exists());
+                rec.tick(at(1_000));
+                assert!(rec.live);
+            }
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert_ne!(good.len(), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_report_over_an_unusable_record_says_so_instead_of_showing_zeros_alone() {
+        let text = render_report(
+            &Journal::fresh(),
+            false,
+            "1.0.7",
+            Some("could not be read, so the counts below are empty"),
+        );
+        assert!(text.contains("Saved record: could not be read, so the counts below are empty"));
+        assert!(!render_report(&Journal::fresh(), false, "1.0.7", None).contains("Saved record"));
+    }
+
+    #[test]
+    fn only_plain_version_numbers_from_a_file_reach_the_report() {
+        let dir = temp("builds");
+        fs::create_dir_all(&dir).unwrap();
+        let raw = r#"{"v":1,"next":6,"sessions":[
+            {"n":1,"build":"Alice-Smith","end":"Clean","panics":2},
+            {"n":2,"build":"PRIVATEIDENTITY123","end":"Lost","stalls":3},
+            {"n":3,"build":"1.0.7-Alice","end":"Clean"},
+            {"n":4,"build":"1.0.7","end":"Clean"},
+            {"n":5,"build":"1.0","end":"Clean"}],
+            "events":[{"launch":2,"kind":"Stall","phase":"TrayMenu","secs":5}]}"#;
+        fs::write(dir.join(JOURNAL), raw).unwrap();
+        let journal = disk(&dir);
+        let text = render_report(&journal, true, "PRIVATEIDENTITY123", None);
+        for personal in ["Alice", "Smith", "PRIVATEIDENTITY123", "1.0.7-", "1.0\n"] {
+            assert!(
+                !text.contains(personal),
+                "{personal:?} reached the report:\n{text}"
+            );
+        }
+        assert!(text.contains("Nudge version: unknown"));
+        assert!(text.contains("Versions: unknown, 1.0.7"), "{text}");
+        // the history is still all there
+        let t = totals(&journal);
+        assert_eq!((t.panics, t.stalls, t.unclean, t.launches), (2, 3, 1, 5));
+        assert!(text.contains("UI stall (step: updating the tray menu)"));
+
+        assert_eq!(
+            clean_build(env!("CARGO_PKG_VERSION")),
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(clean_build("12.0.345"), "12.0.345");
+        for bad in [
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "1.2.3-beta",
+            "a.b.c",
+            "1.2.3 ",
+            "1..3",
+            "123456.1.1",
+            "+1.2.3",
+            "\u{661}.\u{662}.\u{663}",
+        ] {
+            assert_eq!(clean_build(bad), "unknown", "{bad:?}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_hang_after_quitting_began_is_named_as_quitting() {
+        let dir = temp("quit-phase");
+        let mut rec = recorder(&dir);
+        rec.tick(at(0));
+        rec.counters.phase.store(Phase::TrayMenu as u8, Relaxed);
+        rec.counters.quitting.store(true, Relaxed);
+        for t in 1..=5 {
+            rec.tick(at(t * 1_000));
+        }
+        let journal = disk(&dir);
+        let stall = journal.events.last().unwrap();
+        assert_eq!((stall.kind, stall.phase), (Kind::Stall, Phase::Quit));
+        assert_eq!(Phase::Quit.label(), "quitting");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_closing_write_that_fails_keeps_the_launch_and_collects_nothing_new() {
+        let dir = temp("closing");
+        let c = counters();
+        let mut rec = Recorder::new(dir.clone(), c, "1.2.3");
+        run_healthy(&mut rec, 0, 2_000);
+        let step = slot(Phase::SettingsOpen, 2).unwrap();
+        c.slow[step].store(2, Relaxed);
+        c.panics.store(1, Relaxed);
+        fs::create_dir(dir.join(JOURNAL_TMP)).unwrap();
+
+        // the choice could not be saved, so a second copy still reads "on"
+        let blocked = unsavable("closing-elsewhere");
+        apply_choice(Some(&blocked), c, false);
+        assert_eq!(rec.tick(at(3_000)), None);
+        assert_eq!(
+            Status::from_u8(c.status.load(Relaxed)),
+            Status::ClosePending,
+            "not reported as plain Off"
+        );
+        let view = make_view(&Journal::fresh(), c);
+        assert_eq!(
+            (view.status, view.problem),
+            ("close_pending", Some("stop_unsaved")),
+            "both the save of the choice and the closing write failed, and both are said"
+        );
+        assert!(rec.live && rec.closing && rec.lease.is_some());
+        assert!(rec.finish_clean().is_err(), "quitting reports it too");
+
+        // nothing new is gathered once off, and another copy cannot take over a live owner
+        c.slow[step].store(50, Relaxed);
+        c.panics.store(9, Relaxed);
+        let mut second = recorder(&dir);
+        assert_eq!(second.tick(at(0)), None);
+        assert_eq!(
+            Status::from_u8(second.counters.status.load(Relaxed)),
+            Status::InUse
+        );
+        assert_eq!(disk(&dir).sessions[0].end, End::Running);
+        assert_eq!(totals(&disk(&dir)).unclean, 0);
+
+        // tried again on a slow cadence, not every beat
+        fs::remove_dir(dir.join(JOURNAL_TMP)).unwrap();
+        rec.tick(at(4_000));
+        assert_eq!(disk(&dir).sessions[0].end, End::Running);
+        rec.tick(at(3_000 + CLOSE_RETRY_MS));
+        let closed = disk(&dir);
+        assert_eq!(closed.sessions[0].end, End::Stopped);
+        assert_eq!(
+            (closed.sessions[0].slow[step], closed.sessions[0].panics),
+            (2, 1),
+            "what was gathered before off, and no more"
+        );
+        assert_eq!(Status::shown(c), Status::Off);
+        assert!(!rec.live && rec.lease.is_none());
+
+        // the next owner finds a closed launch, not a lost one
+        second.tick(at(20_000));
+        assert!(second.live);
+        assert_eq!(
+            disk(&dir)
+                .sessions
+                .iter()
+                .map(|s| s.end)
+                .collect::<Vec<_>>(),
+            vec![End::Stopped, End::Running]
+        );
+        assert_eq!(totals(&disk(&dir)).unclean, 0);
+        fs::remove_dir_all(&dir).unwrap();
+        let _ = fs::remove_file(&blocked);
+    }
+
+    #[test]
+    fn a_pending_close_is_finished_before_a_new_launch_starts() {
+        let dir = temp("closing-then-on");
+        let mut rec = recorder(&dir);
+        rec.tick(at(0));
+        fs::create_dir(dir.join(JOURNAL_TMP)).unwrap();
+        write_pref(&dir, false).unwrap();
+        rec.tick(at(1_000));
+        let view = make_view(&Journal::fresh(), rec.counters);
+        assert_eq!(
+            (view.keep, view.status, view.problem),
+            (false, "close_pending", None),
+            "the choice was saved; only the closing write is outstanding"
+        );
+        write_pref(&dir, true).unwrap();
+        // on again, but the old launch still cannot be closed: nothing new starts
+        assert_eq!(rec.tick(at(2_000)), None);
+        assert_eq!(disk(&dir).sessions.len(), 1);
+        fs::remove_dir(dir.join(JOURNAL_TMP)).unwrap();
+        rec.tick(at(1_000 + CLOSE_RETRY_MS));
+        let journal = disk(&dir);
+        assert_eq!(
+            journal.sessions.iter().map(|s| s.end).collect::<Vec<_>>(),
+            vec![End::Stopped, End::Running]
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn one_probe_stays_in_flight_across_a_reset_and_a_sleep() {
+        // nobody ever answers; `seq` counts the probes posted
+        fn run(watch: &mut Watch, now: Clock) -> Seen {
+            watch.step(now, 0, Phase::TrayMenu).1
+        }
+        let mut watch = Watch::default();
+        assert_eq!(run(&mut watch, at(0)), Seen::Nothing);
+        assert_eq!(watch.seq, 1);
+
+        watch.reset();
+        assert_eq!(run(&mut watch, at(1_000)), Seen::Nothing);
+        // the computer sleeps, then the grace period passes
+        let woke = Clock {
+            mono: 2_000,
+            wall: 1_000_000_000 + 2_000 + 600_000,
+        };
+        assert_eq!(run(&mut watch, woke), Seen::Nothing);
+        let later = |t: u64| Clock {
+            mono: t,
+            wall: woke.wall + (t - 2_000),
+        };
+        for t in (3_000..=18_000).step_by(1_000) {
+            assert_eq!(run(&mut watch, later(t)), Seen::Nothing, "at {t}");
+        }
+        watch.reset();
+        assert_eq!(run(&mut watch, later(19_000)), Seen::Nothing);
+        assert_eq!(
+            watch.seq, 1,
+            "no second probe while the first is unanswered"
+        );
+
+        // still unanswered 5 seconds on: the freeze is found, on the same probe
+        for t in (20_000..=23_000).step_by(1_000) {
+            assert_eq!(run(&mut watch, later(t)), Seen::Nothing, "at {t}");
+        }
+        assert_eq!(
+            run(&mut watch, later(24_000)),
+            Seen::Stalled(Phase::TrayMenu)
+        );
+        assert_eq!(watch.seq, 1);
+
+        // answered at last: one recovery, then the next probe
+        let (post, seen) = watch.step(later(25_000), 1, Phase::Idle);
+        assert_eq!(post, Some(2));
+        assert!(matches!(
+            seen,
+            Seen::Recovered {
+                phase: Phase::TrayMenu,
+                ..
+            }
+        ));
     }
 }
