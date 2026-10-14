@@ -150,18 +150,44 @@ Review diagnostics shows the exact text that would be shared, and Copy report
 copies that text. Whether to send it to anyone is up to you.
 
 The record holds counts, fixed step names such as "saving settings" and coarse
-durations. It holds no reminder text, file names or paths, exact times, device
-identifiers or panic messages, and the report is rebuilt from those numbers each
-time rather than read back as text. It is a few kilobytes in `diagnostics` in
-the `nudge` folder of your user config directory, and deleting that folder
-removes it.
+durations. A freeze while Nudge is quitting is named "quitting". The record holds
+no reminder text, file names or paths, exact times, device identifiers or panic
+messages, and the report is rebuilt from those numbers each time rather than
+read back as text. The only version text it keeps is three plain numbers such as
+`1.0.7`; anything else found in the file shows as `unknown`. The record is a
+few kilobytes in a `diagnostics` folder in the `nudge` folder of your user
+config directory. Deleting that folder removes the record. Quit Nudge before
+you delete it: on Windows the folder cannot be removed while Nudge has it open.
+On macOS and Linux, a folder deleted while Nudge is recording is recreated at the
+next beat as a new launch, and the old launch's counts and events are not kept.
+If only the lock file is deleted, the current launch keeps its record.
+One case is not fully covered: if the lock file is deleted while the final write
+for a switched-off launch is still pending, that launch may later be counted as
+unclean.
 
-Turn off Keep local diagnostics to stop recording. Turning it off saves once
-more, so counts and timings gathered since the last save are kept. After that nothing is
-written, including after a restart, and what was already kept stays viewable
-until you delete it. A second copy of Nudge does not record while another one is
-running. A panic that ends the app within about a second of happening can be
-missed, and a normal quit that cannot be written in time counts as unclean.
+The choice to keep diagnostics off is also kept in `diagnostics.off`, beside the
+folder, so deleting the folder does not turn recording back on. Turning the
+setting on removes both copies, and deleting the whole `nudge` folder removes
+both as well.
+
+Turn off Keep local diagnostics to stop recording. Nudge closes the current
+launch with one last write, which keeps the counts and timings gathered before
+you turned it off. After that nothing new is written, including after a restart,
+and what was already kept stays viewable until you delete it. If that last write
+fails, Settings says the last record isn't saved yet. Nudge keeps its hold on
+the record, collects nothing new and tries again every 10 seconds, so a second
+copy of Nudge does not count the launch as unclean while this one is still
+running. If the choice itself can't be saved, recording stays off until Nudge
+quits.
+
+If the saved record can't be read, or is not one this version of Nudge
+understands, Nudge leaves the file exactly as it is and does not record. It
+never renames, copies or replaces it, and Settings and the report say so.
+To start over, quit Nudge and delete the `diagnostics` folder.
+
+A second copy of Nudge does not record while another one is running. A panic
+that ends the app within about a second of happening can be missed, and a
+normal quit that cannot be written in time counts as unclean.
 
 ## Platform notes
 
