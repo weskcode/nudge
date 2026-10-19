@@ -363,7 +363,7 @@ if (isWindows) {
 }
 $("h-wake").textContent = `After your ${device} wakes`;
 $("diagnostics-privacy").textContent =
-  `Diagnostics are counts and a few step names kept in a small file on this ${device}. They hold no reminder text, file names or paths, and Nudge sends them nowhere. Review shows exactly what would be shared, and copying it to send to someone is your choice. An unclean exit is a launch that never recorded a normal quit, such as a crash, a force quit or a power loss; its cause is unknown. On a Mac, a logout, restart, shutdown or Quit from another app counts as a normal quit when the system asks Nudge to quit, unless the record cannot be written in time.`;
+  `Diagnostics are counts and a few step names kept in a small file on this ${device}. They hold no reminder text, file names or paths, and Nudge sends them nowhere. Review shows exactly what would be shared, and copying it to send to someone is your choice. An unclean exit is a launch that never recorded a normal quit, such as a crash, a force quit or a power loss; its cause is unknown. On a Mac, a logout, restart, shutdown or Quit from another app counts as a normal quit when the system asks Nudge to quit. On Windows, a logout, restart or shutdown does. Either way, it is unclean if the record cannot be written in time.`;
 
 let saved = null;
 try {
