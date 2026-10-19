@@ -1623,6 +1623,8 @@ fn main() {
         })
         .setup(|app| {
             let _startup = diagnostics::span(Phase::Startup);
+            // macOS only: hides the Dock icon. Windows and Linux have no such policy.
+            #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let handle = app.handle().clone();
