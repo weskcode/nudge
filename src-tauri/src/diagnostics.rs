@@ -768,7 +768,8 @@ impl Watch {
             if beat > 1_000 + BEAT_SLACK_MS || (wall - beat as i64).unsigned_abs() > BEAT_SLACK_MS {
                 self.grace_until = now.mono + GRACE_MS;
                 self.rewait(self.grace_until);
-                self.stalled = None;
+                // a stall already recorded stays recorded: keeping it stops the same
+                // unanswered probe from counting as a second stall after the grace
             }
         }
         self.last = Some(now);
@@ -1600,8 +1601,20 @@ fn request_clean(counters: &Counters, worker: Option<&Thread>, wait: Duration) -
 pub fn mark_clean_exit() {
     match request_clean(&COUNTERS, WORKER.get(), CLEAN_EXIT_WAIT) {
         CleanExit::Recorded => {}
-        CleanExit::Failed => println!("diagnostics: the normal quit could not be recorded"),
-        CleanExit::TimedOut => println!("diagnostics: the normal quit was not recorded in time"),
+        // stderr, not println!: a closed pipe makes println! panic, and this runs
+        // inside the macOS notification block. the write error is ignored on purpose
+        CleanExit::Failed => {
+            let _ = writeln!(
+                io::stderr(),
+                "diagnostics: the normal quit could not be recorded"
+            );
+        }
+        CleanExit::TimedOut => {
+            let _ = writeln!(
+                io::stderr(),
+                "diagnostics: the normal quit was not recorded in time"
+            );
+        }
     }
 }
 
@@ -1909,6 +1922,30 @@ mod tests {
             assert_eq!(rec.tick(at(t)), None);
         }
         assert_eq!(disk(&dir).sessions[0].stalls, 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_stall_already_recorded_is_not_counted_again_after_a_sleep() {
+        let dir = temp("stall-sleep");
+        let mut rec = recorder(&dir);
+        for t in (0..=6_000).step_by(1_000) {
+            rec.tick(at(t));
+        }
+        assert_eq!(disk(&dir).sessions[0].stalls, 1);
+        // the computer sleeps while the same probe is still unanswered
+        let woke = Clock {
+            mono: 7_000,
+            wall: 1_000_000_000 + 7_000 + 600_000,
+        };
+        let after = |t: u64| Clock {
+            mono: t,
+            wall: woke.wall + (t - 7_000),
+        };
+        for t in (7_000..=30_000).step_by(1_000) {
+            rec.tick(after(t));
+        }
+        assert_eq!(disk(&dir).sessions[0].stalls, 1, "one freeze, one stall");
         fs::remove_dir_all(&dir).unwrap();
     }
 
