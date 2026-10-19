@@ -291,6 +291,13 @@ pub fn quit_started() {
     COUNTERS.quitting.store(true, Relaxed);
 }
 
+// whether a quit has begun. a Windows shutdown never gets here, so the Exit
+// callback can tell it apart from a quit that ExitRequested already recorded
+#[cfg(target_os = "windows")]
+pub fn quitting() -> bool {
+    COUNTERS.quitting.load(Relaxed)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 enum Status {
@@ -1587,7 +1594,8 @@ fn request_clean(counters: &Counters, worker: Option<&Thread>, wait: Duration) -
 }
 
 // after the event loop has returned and Tauri has cleaned up: the normal quit
-// path. on macOS, watch_terminate calls it too. waits at most 300 ms; a record that could not be
+// path. on macOS, watch_terminate calls it too, and on Windows the Exit callback
+// does when no quit began. waits at most 300 ms; a record that could not be
 // written leaves this launch to be counted as unclean, which is what it will look like
 pub fn mark_clean_exit() {
     match request_clean(&COUNTERS, WORKER.get(), CLEAN_EXIT_WAIT) {

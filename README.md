@@ -143,8 +143,9 @@ Settings > General shows three counts over the last 20 launches:
 - Unclean exits: a launch that never recorded a normal quit. A crash, a force
   quit and a power loss all look like this, so the cause is unknown. On macOS,
   a logout, restart, shutdown or Quit from another app is recorded as a normal
-  quit when the system asks Nudge to quit, but a launch still counts as unclean
-  if the record cannot be written in time.
+  quit when the system asks Nudge to quit. On Windows, a logout, restart or
+  shutdown is recorded the same way. A launch still counts as unclean if the
+  record cannot be written in time.
 
 Review diagnostics shows the exact text that would be shared, and Copy report
 copies that text. Whether to send it to anyone is up to you.

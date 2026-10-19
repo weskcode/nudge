@@ -1752,14 +1752,23 @@ fn main() {
         .expect("error while building nudge");
     // run() is run_return() followed by process::exit(code) on every platform.
     // splitting them gives a place after Tauri's cleanup where a normal quit is
-    // certain; RunEvent::Exit comes before the cleanup and proves nothing
+    // certain. RunEvent::Exit comes before the cleanup, so it is used only on
+    // Windows, and only for a session end that never began a quit
     let code = app.run_return(|_app, event| {
-        if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
-            if code.is_none() {
-                api.prevent_exit();
-            } else {
-                diagnostics::quit_started();
+        match event {
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                if code.is_none() {
+                    api.prevent_exit();
+                } else {
+                    diagnostics::quit_started();
+                }
             }
+            // on Windows, a logout or shutdown ends the event loop without
+            // ExitRequested or a return from run_return, so the normal quit is
+            // recorded here, from the same message that ends the session
+            #[cfg(target_os = "windows")]
+            tauri::RunEvent::Exit if !diagnostics::quitting() => diagnostics::mark_clean_exit(),
+            _ => {}
         }
     });
     if code == 0 {
