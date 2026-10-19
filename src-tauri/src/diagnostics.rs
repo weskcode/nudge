@@ -779,10 +779,9 @@ impl Watch {
         if std::mem::take(&mut self.restart) {
             self.rewait(now.mono.max(self.grace_until));
         }
-        if now.mono < self.grace_until {
-            return (None, Seen::Nothing);
-        }
-
+        // during the grace, an answer still ends a stall recorded before the sleep,
+        // timed from when the freeze began; no new stall is recorded and no probe is posted
+        let graced = now.mono < self.grace_until;
         let mut seen = Seen::Nothing;
         if let Some((seq, since)) = self.pending {
             if answered >= seq {
@@ -793,10 +792,16 @@ impl Watch {
                         secs: (now.mono.saturating_sub(since) / 1_000) as u32,
                     };
                 }
-            } else if now.mono.saturating_sub(since) >= STALL_MS && self.stalled.is_none() {
+            } else if !graced
+                && now.mono.saturating_sub(since) >= STALL_MS
+                && self.stalled.is_none()
+            {
                 self.stalled = Some(phase);
                 seen = Seen::Stalled(phase);
             }
+        }
+        if graced {
+            return (None, seen);
         }
         let post = if self.pending.is_none() {
             self.seq += 1;
@@ -1984,6 +1989,45 @@ mod tests {
         // the first probe went out at 1 s and was answered at 21 s: 20 s of waiting,
         // counting the freeze before the sleep. the sleep does not move the monotonic clock
         assert_eq!(recovered[0].secs, 20);
+        assert_eq!(journal.sessions[0].stalls, 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_answer_during_the_grace_after_a_sleep_still_ends_a_recorded_stall() {
+        let dir = temp("stall-sleep-grace-answer");
+        let mut rec = recorder(&dir);
+        for t in (0..=6_000).step_by(1_000) {
+            rec.tick(at(t));
+        }
+        assert_eq!(disk(&dir).sessions[0].stalls, 1);
+        // the computer wakes at 7 s of awake time and the main thread answers at 8 s,
+        // well inside the grace that the wake starts
+        let woke = Clock {
+            mono: 7_000,
+            wall: 1_000_000_000 + 7_000 + 600_000,
+        };
+        rec.tick(woke);
+        rec.counters.answered_probe.store(1, Release);
+        let after = |t: u64| Clock {
+            mono: t,
+            wall: woke.wall + (t - 7_000),
+        };
+        rec.tick(after(8_000));
+        // the main thread answers the probes posted after the grace too
+        rec.counters.answered_probe.store(u64::MAX, Release);
+        for t in (9_000..=30_000).step_by(1_000) {
+            rec.tick(after(t));
+        }
+        let journal = disk(&dir);
+        let recovered: Vec<_> = journal
+            .events
+            .iter()
+            .filter(|e| e.kind == Kind::Recovered)
+            .collect();
+        assert_eq!(recovered.len(), 1, "one answer, one recovery");
+        // the probe went out at 0 s and was answered at 8 s: 8 s, stored rounded to 5
+        assert_eq!(recovered[0].secs, 5);
         assert_eq!(journal.sessions[0].stalls, 1);
         fs::remove_dir_all(&dir).unwrap();
     }
