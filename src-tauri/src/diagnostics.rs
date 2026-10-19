@@ -767,9 +767,12 @@ impl Watch {
             // slept or the clock moved: whatever the main thread did, it was not a freeze
             if beat > 1_000 + BEAT_SLACK_MS || (wall - beat as i64).unsigned_abs() > BEAT_SLACK_MS {
                 self.grace_until = now.mono + GRACE_MS;
-                self.rewait(self.grace_until);
-                // a stall already recorded stays recorded: keeping it stops the same
-                // unanswered probe from counting as a second stall after the grace
+                // a stall already recorded stays recorded, and its wait keeps counting
+                // from when the freeze began, so the same unanswered probe cannot
+                // count as a second stall and the recovery reports the whole wait
+                if self.stalled.is_none() {
+                    self.rewait(self.grace_until);
+                }
             }
         }
         self.last = Some(now);
@@ -785,12 +788,9 @@ impl Watch {
             if answered >= seq {
                 self.pending = None;
                 if let Some(phase) = self.stalled.take() {
-                    // a stall kept across a sleep was timed from the end of the grace,
-                    // so the wait can read short. the stall itself proves at least STALL_MS
-                    let waited = (now.mono.saturating_sub(since) / 1_000) as u32;
                     seen = Seen::Recovered {
                         phase,
-                        secs: waited.max((STALL_MS / 1_000) as u32),
+                        secs: (now.mono.saturating_sub(since) / 1_000) as u32,
                     };
                 }
             } else if now.mono.saturating_sub(since) >= STALL_MS && self.stalled.is_none() {
@@ -1981,7 +1981,9 @@ mod tests {
             .filter(|e| e.kind == Kind::Recovered)
             .collect();
         assert_eq!(recovered.len(), 1, "one answer, one recovery");
-        assert!(recovered[0].secs >= (STALL_MS / 1_000) as u32);
+        // the first probe went out at 1 s and was answered at 21 s: 20 s of waiting,
+        // counting the freeze before the sleep. the sleep does not move the monotonic clock
+        assert_eq!(recovered[0].secs, 20);
         assert_eq!(journal.sessions[0].stalls, 1);
         fs::remove_dir_all(&dir).unwrap();
     }
