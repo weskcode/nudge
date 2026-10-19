@@ -785,9 +785,12 @@ impl Watch {
             if answered >= seq {
                 self.pending = None;
                 if let Some(phase) = self.stalled.take() {
+                    // a stall kept across a sleep was timed from the end of the grace,
+                    // so the wait can read short. the stall itself proves at least STALL_MS
+                    let waited = (now.mono.saturating_sub(since) / 1_000) as u32;
                     seen = Seen::Recovered {
                         phase,
-                        secs: (now.mono.saturating_sub(since) / 1_000) as u32,
+                        secs: waited.max((STALL_MS / 1_000) as u32),
                     };
                 }
             } else if now.mono.saturating_sub(since) >= STALL_MS && self.stalled.is_none() {
@@ -1946,6 +1949,69 @@ mod tests {
             rec.tick(after(t));
         }
         assert_eq!(disk(&dir).sessions[0].stalls, 1, "one freeze, one stall");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_stall_kept_across_a_sleep_reports_at_least_its_own_length_when_answered() {
+        let dir = temp("stall-sleep-recovery");
+        let mut rec = recorder(&dir);
+        for t in (0..=6_000).step_by(1_000) {
+            rec.tick(at(t));
+        }
+        let woke = Clock {
+            mono: 7_000,
+            wall: 1_000_000_000 + 7_000 + 600_000,
+        };
+        let after = |t: u64| Clock {
+            mono: t,
+            wall: woke.wall + (t - 7_000),
+        };
+        for t in (7_000..=20_000).step_by(1_000) {
+            rec.tick(after(t));
+        }
+        rec.counters.answered_probe.store(1, Release);
+        for t in (21_000..=23_000).step_by(1_000) {
+            rec.tick(after(t));
+        }
+        let journal = disk(&dir);
+        let recovered: Vec<_> = journal
+            .events
+            .iter()
+            .filter(|e| e.kind == Kind::Recovered)
+            .collect();
+        assert_eq!(recovered.len(), 1, "one answer, one recovery");
+        assert!(recovered[0].secs >= (STALL_MS / 1_000) as u32);
+        assert_eq!(journal.sessions[0].stalls, 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_freeze_after_a_real_recovery_is_counted_as_a_second_stall() {
+        let dir = temp("second-freeze");
+        let mut rec = recorder(&dir);
+        for t in (0..=6_000).step_by(1_000) {
+            rec.tick(at(t));
+        }
+        rec.counters.answered_probe.store(1, Release);
+        for t in (7_000..=8_000).step_by(1_000) {
+            rec.tick(at(t));
+        }
+        assert_eq!(disk(&dir).sessions[0].stalls, 1);
+        // answered, then frozen again with no sleep in between
+        for t in (9_000..=16_000).step_by(1_000) {
+            rec.tick(at(t));
+        }
+        let journal = disk(&dir);
+        assert_eq!(journal.sessions[0].stalls, 2);
+        assert_eq!(
+            journal
+                .events
+                .iter()
+                .filter(|e| e.kind == Kind::Recovered)
+                .count(),
+            1
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
