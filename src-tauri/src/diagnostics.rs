@@ -1845,7 +1845,6 @@ mod tests {
         let dir = temp("deleted-events");
         let mut rec = recorder(&dir);
         run_healthy(&mut rec, 0, 10_000);
-        let launch = rec.journal.sessions.last().unwrap().n;
         rec.journal.event(Kind::Stall, Phase::TrayMenu, 5);
         rec.dirty = true;
         rec.tick(at(10_500));
