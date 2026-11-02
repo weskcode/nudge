@@ -168,8 +168,12 @@ unclean.
 
 The choice to keep diagnostics off is also kept in `diagnostics.off`, beside the
 folder, so deleting the folder does not turn recording back on. Turning the
-setting on removes both copies, and deleting the whole `nudge` folder removes
-both as well.
+setting on removes both copies. `diagnostics.next`, also beside the folder,
+holds only the number the next launch gets, so a record started after the
+folder is deleted carries on the numbering. It stays when the folder is
+deleted; delete it as well to start the numbering at 1 again. The report never
+shows these numbers. Deleting the whole `nudge` folder removes all of them,
+along with your settings.
 
 Turn off Keep local diagnostics to stop recording. Nudge closes the current
 launch with one last write, which keeps the counts and timings gathered before

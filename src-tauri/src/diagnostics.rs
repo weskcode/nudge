@@ -633,6 +633,50 @@ fn write_pref(dir: &Path, on: bool) -> io::Result<()> {
     }
 }
 
+// the next launch number is kept beside the folder too, so a record started
+// over after the folder is deleted carries on the numbering instead of going
+// back to 1. only a plain file holding a plain number counts; anything else,
+// or a number so high that launches would start sharing it, reads as 1
+fn next_marker(dir: &Path) -> PathBuf {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    dir.with_file_name(format!("{name}.next"))
+}
+
+const MAX_NEXT: u32 = u32::MAX - MAX_SESSIONS as u32;
+
+fn read_next(dir: &Path) -> u32 {
+    let path = next_marker(dir);
+    // checked before opening: a pipe would hold the recorder, a link point elsewhere
+    if !fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file()) {
+        return 1;
+    }
+    let mut text = String::new();
+    if File::open(&path)
+        .and_then(|file| file.take(16).read_to_string(&mut text))
+        .is_err()
+        || text.len() >= 16
+    {
+        return 1;
+    }
+    let digits = text.trim();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return 1;
+    }
+    digits.parse::<u32>().ok().filter(|&n| (1..=MAX_NEXT).contains(&n)).unwrap_or(1)
+}
+
+// written beside it, then renamed over it, so a link there is replaced
+// rather than written through, and a cut-off write never leaves half a number
+fn write_next(dir: &Path, next: u32) -> io::Result<()> {
+    let path = next_marker(dir);
+    let temp = path.with_extension("next.tmp");
+    let result = fs::write(&temp, format!("{next}\n")).and_then(|()| fs::rename(&temp, &path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
 struct Lease {
     _file: File,
 }
@@ -1024,7 +1068,10 @@ impl Recorder {
         // a record that cannot be read or understood is left exactly as it is:
         // starting over would replace history that may only be unreachable for now
         let mut journal = match load_journal(&self.dir) {
-            Load::Missing => Journal::fresh(),
+            Load::Missing => Journal {
+                next: read_next(&self.dir),
+                ..Journal::fresh()
+            },
             Load::Valid(journal) => journal,
             Load::Invalid => {
                 self.set_status(Status::HistoryInvalid);
@@ -1102,6 +1149,9 @@ impl Recorder {
             }
             Some(Ok(())) => {}
         }
+        // only the numbering depends on it: a launch whose number can't be kept
+        // still records, and a record started over later begins at 1 as before
+        let _ = write_next(&self.dir, journal.next);
         if resumed && closed {
             // the Stopped record is saved; this copy lets the lock go and begins
             // nothing further, so the launch is not reported as lost
@@ -1707,13 +1757,42 @@ mod tests {
         pref_markers(dir).iter().all(|marker| marker.exists())
     }
 
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("nudge-diag-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        for marker in pref_markers(&dir) {
+    // a test's folder: what is kept beside it goes with it, even when the test fails
+    struct TempDir(PathBuf);
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for TempDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            clear(&self.0);
+        }
+    }
+
+    fn clear(dir: &Path) {
+        let _ = fs::remove_dir_all(dir);
+        for marker in pref_markers(dir) {
             let _ = fs::remove_file(marker);
         }
-        dir
+        let _ = fs::remove_file(next_marker(dir));
+        let _ = fs::remove_dir_all(next_marker(dir));
+        let _ = fs::remove_file(next_marker(dir).with_extension("next.tmp"));
+    }
+
+    fn temp(name: &str) -> TempDir {
+        let dir = std::env::temp_dir().join(format!("nudge-diag-{name}-{}", std::process::id()));
+        clear(&dir);
+        TempDir(dir)
     }
 
     fn at(mono: u64) -> Clock {
@@ -1845,6 +1924,7 @@ mod tests {
         let dir = temp("deleted-events");
         let mut rec = recorder(&dir);
         run_healthy(&mut rec, 0, 10_000);
+        let launch = rec.journal.sessions.last().unwrap().n;
         rec.journal.event(Kind::Stall, Phase::TrayMenu, 5);
         rec.dirty = true;
         rec.tick(at(10_500));
@@ -1852,15 +1932,73 @@ mod tests {
         rec.tick(at(20_000));
         assert!(rec.live);
         let journal = disk(&dir);
-        // launch numbers start again at 1 with the fresh record, so the new
-        // launch can't be told from the old one by its number
         assert_eq!(journal.sessions.len(), 1, "only the new launch is saved");
+        assert_eq!(
+            journal.sessions[0].n,
+            launch + 1,
+            "the numbering carries on from the counter beside the folder"
+        );
         assert_eq!(journal.sessions[0].end, End::Running);
         assert!(
             !journal.events.iter().any(|e| e.kind == Kind::Stall),
             "the old launch's events went with its folder"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_record_takes_its_first_number_from_the_counter_beside_the_folder() {
+        let dir = temp("counter-kept");
+        let other = temp("counter-other");
+        fs::write(next_marker(&dir), b"7\n").unwrap();
+        let mut rec = recorder(&dir);
+        run_healthy(&mut rec, 0, 2_000);
+        assert_eq!(disk(&dir).sessions[0].n, 7);
+        assert_eq!(
+            fs::read_to_string(next_marker(&dir)).unwrap(),
+            "8\n",
+            "the counter moves on with each launch"
+        );
+        let mut rec = recorder(&other);
+        run_healthy(&mut rec, 0, 2_000);
+        assert_eq!(disk(&other).sessions[0].n, 1, "another folder has a counter of its own");
+    }
+
+    #[test]
+    fn a_counter_that_is_not_a_plain_number_starts_the_record_at_1() {
+        for text in ["", "seven", "-3", "+7", "0", "4294967295", "99999999999999999999", "7               x", "/Users/alice/secret"] {
+            let dir = temp("counter-garbled");
+            fs::write(next_marker(&dir), text).unwrap();
+            let mut rec = recorder(&dir);
+            run_healthy(&mut rec, 0, 2_000);
+            assert_eq!(disk(&dir).sessions[0].n, 1, "{text:?} reads as no number");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_counter_that_is_a_link_is_neither_followed_nor_written_through() {
+        let dir = temp("counter-link");
+        let target = dir.with_file_name(format!("{}.target", dir.file_name().unwrap().to_string_lossy()));
+        fs::write(&target, b"7\n").unwrap();
+        std::os::unix::fs::symlink(&target, next_marker(&dir)).unwrap();
+        let mut rec = recorder(&dir);
+        run_healthy(&mut rec, 0, 2_000);
+        assert_eq!(disk(&dir).sessions[0].n, 1, "a link is not read as the counter");
+        assert_eq!(fs::read(&target).unwrap(), b"7\n", "the file it points to is left alone");
+        assert!(fs::symlink_metadata(next_marker(&dir)).unwrap().file_type().is_file(), "the link is replaced");
+        fs::remove_file(&target).unwrap();
+    }
+
+    #[test]
+    fn a_counter_that_cannot_be_written_does_not_stop_recording() {
+        let dir = temp("counter-unwritable");
+        // a folder where the counter has to go makes its write fail
+        fs::create_dir_all(next_marker(&dir)).unwrap();
+        let mut rec = recorder(&dir);
+        run_healthy(&mut rec, 0, 2_000);
+        assert!(rec.live);
+        assert_eq!(disk(&dir).sessions[0].n, 1);
     }
 
     #[test]
@@ -2576,7 +2714,7 @@ mod tests {
         assert_eq!(COUNTERS.panics.load(Relaxed), before + 1);
         assert_eq!(COUNTERS.panic_phase.load(Relaxed), BACKGROUND);
 
-        let mut rec = Recorder::new(dir.clone(), &COUNTERS, "1.2.3");
+        let mut rec = Recorder::new(dir.to_path_buf(), &COUNTERS, "1.2.3");
         // the counter already stood above zero when this launch began; one more panic follows it
         rec.tick(at(0));
         let _ = std::thread::spawn(|| panic!("second {}", "SENTINEL-alice")).join();
@@ -2720,7 +2858,7 @@ mod tests {
     }
 
     // a path where a file stands in the way of the preference file
-    fn unsavable(name: &str) -> PathBuf {
+    fn unsavable(name: &str) -> TempDir {
         let path = temp(name);
         fs::write(&path, "in the way").unwrap();
         path
@@ -2732,7 +2870,7 @@ mod tests {
             let dir = temp("start-off");
             let blocked = unsavable("start-off-elsewhere");
             let c = counters();
-            let rec = held_beat(Recorder::new(dir.clone(), c, "1.2.3"), || {
+            let rec = held_beat(Recorder::new(dir.to_path_buf(), c, "1.2.3"), || {
                 apply_choice(Some(if saved { &dir } else { &blocked }), c, false)
             });
             assert!(!rec.live && !c.enabled());
@@ -2772,7 +2910,7 @@ mod tests {
             let dir = temp("write-off");
             let blocked = unsavable("write-off-elsewhere");
             let c = counters();
-            let mut rec = Recorder::new(dir.clone(), c, "1.2.3");
+            let mut rec = Recorder::new(dir.to_path_buf(), c, "1.2.3");
             rec.tick(at(0));
             let before = fs::read(dir.join(JOURNAL)).unwrap();
             // a stall noticed in memory, waiting for its write
@@ -2969,7 +3107,7 @@ mod tests {
     fn a_closing_write_that_fails_keeps_the_launch_and_collects_nothing_new() {
         let dir = temp("closing");
         let c = counters();
-        let mut rec = Recorder::new(dir.clone(), c, "1.2.3");
+        let mut rec = Recorder::new(dir.to_path_buf(), c, "1.2.3");
         run_healthy(&mut rec, 0, 2_000);
         let step = slot(Phase::SettingsOpen, 2).unwrap();
         c.slow[step].store(2, Relaxed);
