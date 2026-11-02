@@ -1852,6 +1852,8 @@ mod tests {
         rec.tick(at(20_000));
         assert!(rec.live);
         let journal = disk(&dir);
+        // launch numbers start again at 1 with the fresh record, so the new
+        // launch can't be told from the old one by its number
         assert_eq!(journal.sessions.len(), 1, "only the new launch is saved");
         assert_eq!(journal.sessions[0].end, End::Running);
         assert!(
