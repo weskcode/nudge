@@ -880,6 +880,9 @@ struct Recorder {
     base_slow: [u32; SLOTS],
     saved_slow: [u32; SLOTS],
     saved_at: u64,
+    // recording has been on since the process started, so the first launch
+    // record also keeps what was counted before the worker's first beat
+    since_start: bool,
     watch: Watch,
     // tests hold the recorder here, after its reads and before it commits a write
     #[cfg(test)]
@@ -904,6 +907,7 @@ impl Recorder {
             base_slow: [0; SLOTS],
             saved_slow: [0; SLOTS],
             saved_at: 0,
+            since_start: true,
             watch: Watch::default(),
             #[cfg(test)]
             gate: None,
@@ -944,6 +948,9 @@ impl Recorder {
             self.watch.reset();
         }
         if pref != Pref::On {
+            // counting runs from startup before the saved choice is read, so what
+            // was counted before an off is never added to a later record
+            self.since_start = false;
             if self.stop(now.mono) {
                 self.set_status(if pref == Pref::Unreadable {
                     Status::PrefUnreadable
@@ -1168,9 +1175,14 @@ impl Recorder {
         self.dirty = false;
         // a continued launch keeps the baselines its counts are measured from
         if !resumed {
-            self.base_panics = self.counters.panics.load(Relaxed);
+            if std::mem::take(&mut self.since_start) {
+                self.base_panics = 0;
+                self.base_slow = [0; SLOTS];
+            } else {
+                self.base_panics = self.counters.panics.load(Relaxed);
+                self.base_slow = self.counters.slow_now();
+            }
             self.seen_panics = self.base_panics;
-            self.base_slow = self.counters.slow_now();
             self.saved_slow = [0; SLOTS];
         }
         self.watch.reset();
@@ -2270,6 +2282,65 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_step_or_panic_before_the_first_beat_counts_for_the_launch() {
+        let dir = temp("startup");
+        let mut rec = recorder(&dir);
+        bump(&rec.counters.slow[0]);
+        bump(&rec.counters.panics);
+        rec.tick(at(0));
+        let saved = disk(&dir);
+        let launch = saved.sessions.last().unwrap();
+        assert_eq!(launch.slow[0], 1, "a slow startup step is kept");
+        assert_eq!(launch.panics, 1, "a startup panic is kept");
+        assert!(saved.events.iter().any(|e| e.kind == Kind::Panic));
+    }
+
+    #[test]
+    fn startup_counts_wait_through_a_failed_start_but_not_into_a_later_launch() {
+        let dir = temp("startup-retry");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(JOURNAL), "not a record").unwrap();
+        let mut rec = recorder(&dir);
+        bump(&rec.counters.slow[0]);
+        bump(&rec.counters.panics);
+        assert_eq!(rec.tick(at(0)), None);
+        assert!(!rec.live, "an unusable record stops the start");
+        fs::remove_file(dir.join(JOURNAL)).unwrap();
+        rec.tick(at(1_000));
+        let launch = disk(&dir).sessions.last().unwrap().clone();
+        assert_eq!((launch.slow[0], launch.panics), (1, 1), "kept through the retry");
+
+        fs::remove_dir_all(&dir).unwrap();
+        rec.tick(at(2_000));
+        assert!(rec.live);
+        let journal = disk(&dir);
+        assert_eq!(journal.sessions.len(), 1, "only the new launch is saved");
+        let launch = &journal.sessions[0];
+        assert_eq!(
+            (launch.slow[0], launch.panics),
+            (0, 0),
+            "a later launch counts from its own start"
+        );
+    }
+
+    #[test]
+    fn what_happens_while_recording_is_off_is_not_counted_once_it_is_on() {
+        let dir = temp("startup-off");
+        write_pref(&dir, false).unwrap();
+        let mut rec = recorder(&dir);
+        bump(&rec.counters.slow[0]);
+        bump(&rec.counters.panics);
+        assert_eq!(rec.tick(at(0)), None);
+        write_pref(&dir, true).unwrap();
+        rec.tick(at(1_000));
+        let saved = disk(&dir);
+        let launch = saved.sessions.last().unwrap();
+        assert_eq!(launch.slow[0], 0, "counted before the choice was on");
+        assert_eq!(launch.panics, 0);
+        assert!(saved.events.iter().all(|e| e.kind != Kind::Panic));
+    }
+
+    #[test]
     fn an_unreadable_setting_fails_closed_and_a_missing_one_means_on() {
         let dir = temp("unreadable");
         assert_eq!(
@@ -2715,7 +2786,9 @@ mod tests {
         assert_eq!(COUNTERS.panic_phase.load(Relaxed), BACKGROUND);
 
         let mut rec = Recorder::new(dir.to_path_buf(), &COUNTERS, "1.2.3");
-        // the counter already stood above zero when this launch began; one more panic follows it
+        // the shared counters hold counts from before this launch began, as when
+        // recording is turned on after startup; one more panic follows them
+        rec.since_start = false;
         rec.tick(at(0));
         let _ = std::thread::spawn(|| panic!("second {}", "SENTINEL-alice")).join();
         rec.tick(at(1_000));
