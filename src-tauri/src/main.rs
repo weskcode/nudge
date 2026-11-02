@@ -626,6 +626,8 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
                     state.fades.lock().unwrap().insert(label.clone(), (0, 0.0));
                     set_window_alpha(app, &label, 0.0);
                 }
+                #[cfg(not(target_os = "macos"))]
+                let _ = window;
                 opened.push(label);
             }
             Err(error) => println!("overlay {label} failed to create: {error:?}"),
@@ -1063,7 +1065,6 @@ fn play_sound(name: &str) {
         let _ = result;
     }
 }
-
 
 // Take a Break Now: the next nudge due, early. with reminders off (or every
 // nudge off) it shows the first nudge and starts nothing when dismissed
@@ -1533,7 +1534,6 @@ fn open_settings(app: AppHandle) {
     }
 }
 
-
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
@@ -1596,6 +1596,7 @@ fn main() {
             }
         })
         .setup(|app| {
+            #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let handle = app.handle().clone();

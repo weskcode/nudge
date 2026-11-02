@@ -22,6 +22,7 @@ const BREAK_IDEAS = [
 const isMac = navigator.userAgent.includes("Mac");
 let snoozeMins = 5;
 let enterMs = 0;
+let fadeOutMs = 0;
 
 // how long each animation (Settings picks one per nudge) takes to fade in, and,
 // off macOS, out; styles.css has the matching keyframes
@@ -139,7 +140,6 @@ listen("nudge://overlay", (event) => renderAlso(event.payload.also))
 
 // fade out before the window closes; the first request wins. on macOS the app
 // fades every screen's window out itself, so there is nothing to wait for here
-let fadeOutMs = 0;
 function leave(command, args) {
   if (document.body.classList.contains("leaving")) return;
   // on failure bring the reminder back so it can be dismissed again
