@@ -579,11 +579,19 @@ const DIAGNOSTICS_PROBLEM = {
   start_unsaved: "Couldn’t turn recording on.",
 };
 
+function diagnosticsStatusText(d) {
+  const turningOn = d.keep && d.status === "off";
+  const status = turningOn ? "Turning on…" : DIAGNOSTICS_STATUS[d.status];
+  const problem = d.problem && DIAGNOSTICS_PROBLEM[d.problem];
+  if (!problem) return status || "Status unavailable";
+  // a choice that couldn't be saved can come with a record that couldn't be
+  // either, so the status follows the problem unless it only repeats "off"
+  return status && d.status !== "off" ? `${problem} ${status}.` : problem;
+}
+
 function renderDiagnostics(d) {
   $("keep-diagnostics").checked = d.keep;
-  const turningOn = d.keep && d.status === "off";
-  $("diagnostics-status").textContent =
-    (d.problem && DIAGNOSTICS_PROBLEM[d.problem]) || (turningOn ? "Turning on…" : DIAGNOSTICS_STATUS[d.status]) || "Status unavailable";
+  $("diagnostics-status").textContent = diagnosticsStatusText(d);
   $("diag-panics").textContent = String(d.panics);
   $("diag-stalls").textContent = String(d.stalls);
   $("diag-unclean").textContent = String(d.unclean);
