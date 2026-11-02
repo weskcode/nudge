@@ -26,6 +26,8 @@
     <symbol id="i-login" viewBox="0 0 24 24"><path d="M10 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20H10M14 16l4-4-4-4M18 12H9"/></symbol>
     <symbol id="i-motion" viewBox="0 0 24 24"><path d="M3.5 12c2.5-6 5-6 8.5 0s6 6 8.5 0"/></symbol>
     <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><rect x="7.5" y="9" width="9" height="6" rx="1.5"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4.5 21 19.5H3z"/><path d="M12 10v4.5M12 17.2v.1"/></symbol>
     <!-- a nudge's symbol, on its tile and its reminder (overlay.html has the same set) -->
     <symbol id="s-figure" viewBox="0 0 24 24"><circle cx="13" cy="4" r="1.8"/><path d="M9 21l2.5-6 2.5 2v4M7.5 11.5l2-3.5 4 1 2.5 3 2.5.5M11.5 15l1-6"/></symbol>
     <symbol id="s-drop" viewBox="0 0 24 24"><path d="M12 3.5s-6 6.4-6 10.8a6 6 0 0 0 12 0C18 9.9 12 3.5 12 3.5z"/></symbol>
@@ -289,6 +291,44 @@
               <span class="tile t-gray"><svg><use href="#i-login"/></svg></span>
               <label class="text" for="launch-at-login">Open at login</label>
               <input id="launch-at-login" type="checkbox" switch />
+            </div>
+          </div>
+
+          <h3 id="h-diagnostics">Diagnostics</h3>
+          <div class="group icons" role="group" aria-labelledby="h-diagnostics">
+            <div class="row">
+              <span class="tile t-teal"><svg><use href="#i-pulse"/></svg></span>
+              <span class="text"><label for="keep-diagnostics">Keep local diagnostics</label><small id="diagnostics-status" role="status"></small></span>
+              <input id="keep-diagnostics" aria-describedby="diagnostics-status" type="checkbox" switch />
+            </div>
+            <div class="row">
+              <span class="tile t-red"><svg><use href="#i-alert"/></svg></span>
+              <span class="text"><span id="l-panics">Panics</span><small>Unexpected errors the app hit</small></span>
+              <output class="stat" id="diag-panics" aria-labelledby="l-panics">0</output>
+            </div>
+            <div class="row">
+              <span class="tile t-orange"><svg><use href="#i-hourglass"/></svg></span>
+              <span class="text"><span id="l-stalls">UI stalls</span><small>Times the app stopped responding for 5 seconds or more</small></span>
+              <output class="stat" id="diag-stalls" aria-labelledby="l-stalls">0</output>
+            </div>
+            <div class="row">
+              <span class="tile t-yellow"><svg><use href="#i-power"/></svg></span>
+              <span class="text"><span id="l-unclean">Unclean exits</span><small>Launches that never recorded a normal quit</small></span>
+              <output class="stat" id="diag-unclean" aria-labelledby="l-unclean">0</output>
+            </div>
+            <div class="row">
+              <span class="tile t-gray"><svg><use href="#i-eye"/></svg></span>
+              <span class="text"><span id="l-review">See what would be shared</span><small id="diag-scope"></small></span>
+              <button id="review-diagnostics" type="button" aria-expanded="false" aria-controls="diagnostics-report">Review diagnostics</button>
+            </div>
+          </div>
+          <p class="note" id="diagnostics-privacy"></p>
+          <div class="group report" id="diagnostics-report" role="group" aria-label="Diagnostics report" hidden>
+            <textarea id="report-text" readonly spellcheck="false" aria-label="Diagnostics report text"></textarea>
+            <div class="report-bar">
+              <small id="report-note" role="status"></small>
+              <button id="copy-report" type="button">Copy report</button>
+              <button id="close-report" type="button">Close</button>
             </div>
           </div>
 
