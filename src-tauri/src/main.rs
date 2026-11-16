@@ -4,6 +4,7 @@
 mod diagnostics;
 #[cfg(target_os = "macos")]
 mod key_tap;
+mod login_item;
 mod schedule;
 
 use diagnostics::Phase;
@@ -617,10 +618,13 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
         .position(position.x as f64 / scale, position.y as f64 / scale)
         .inner_size(size.width as f64 / scale, size.height as f64 / scale)
         .decorations(false)
-        .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(cfg!(target_os = "macos"));
+        #[cfg(any(not(target_os = "macos"), feature = "private-api"))]
+        {
+            builder = builder.transparent(true);
+        }
 
         if cfg!(target_os = "macos") {
             // real behind-window blur (NSVisualEffectView); the page adds only a light tint
@@ -1206,13 +1210,7 @@ fn set_config(
         }
     }
     if let Some(enable) = launch_at_login {
-        use tauri_plugin_autostart::ManagerExt;
-        let autostart = app.autolaunch();
-        let result = if enable {
-            autostart.enable()
-        } else {
-            autostart.disable()
-        };
+        let result = login_item::set_enabled(&app, enable);
         match &result {
             Ok(()) => state.config.lock().unwrap().launch_at_login = enable,
             Err(error) => println!("launch at login change failed: {error:?}"),
@@ -1536,18 +1534,21 @@ fn open_settings(app: AppHandle) {
         #[cfg(target_os = "macos")]
         let builder = {
             use tauri::window::{Effect, EffectState, EffectsBuilder};
-            builder
+            let builder = builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true)
                 // inside the floating sidebar, level with the section title
-                .traffic_light_position(tauri::LogicalPosition::new(22.0, 24.0))
-                .transparent(true)
-                .effects(
-                    EffectsBuilder::new()
-                        .effect(Effect::Sidebar)
-                        .state(EffectState::FollowsWindowActiveState)
-                        .build(),
-                )
+                .traffic_light_position(tauri::LogicalPosition::new(22.0, 24.0));
+            // a transparent web view needs private WebKit keys, which the Mac
+            // App Store build leaves out; without it the page is opaque
+            #[cfg(feature = "private-api")]
+            let builder = builder.transparent(true);
+            builder.effects(
+                EffectsBuilder::new()
+                    .effect(Effect::Sidebar)
+                    .state(EffectState::FollowsWindowActiveState)
+                    .build(),
+            )
         };
         builder.build().ok()
     });
@@ -1559,10 +1560,7 @@ fn open_settings(app: AppHandle) {
 fn main() {
     diagnostics::init(data_dir());
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
+        .plugin(login_item::plugin())
         .manage(App {
             config: Mutex::new(Config::default()),
             schedule: Mutex::new(Schedule::new()),
@@ -1633,11 +1631,8 @@ fn main() {
                 set_aside.and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()));
             // the login item can be removed outside the app (System Settings),
             // so trust the OS over the saved flag
-            {
-                use tauri_plugin_autostart::ManagerExt;
-                if let Ok(enabled) = handle.autolaunch().is_enabled() {
-                    config.launch_at_login = enabled;
-                }
+            if let Ok(enabled) = login_item::is_enabled(&handle) {
+                config.launch_at_login = enabled;
             }
             *app.state::<App>().config.lock().unwrap() = config;
 
