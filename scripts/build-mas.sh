@@ -14,6 +14,10 @@
 # Prints the path of the finished bundle (and package).
 set -euo pipefail
 
+# tauri bundle notarizes, or imports a certificate, when these are set; neither belongs in this build
+unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH \
+  APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
@@ -35,12 +39,14 @@ COMMIT="$(git rev-parse HEAD)"
 SIGN_ID=""
 INSTALLER_ID=""
 if [ "$LOCAL" -eq 0 ]; then
+  # the identities must belong to the team named in the entitlements
+  TEAM="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.team-identifier' src-tauri/entitlements.mas.plist)"
   SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-    | sed -n -E 's/.*"((Apple Distribution|3rd Party Mac Developer Application): [^"]*)".*/\1/p' | head -n 1)"
+    | sed -n -E 's/.*"((Apple Distribution|3rd Party Mac Developer Application): [^"]*\('"$TEAM"'\))".*/\1/p' | head -n 1)"
   INSTALLER_ID="$(security find-identity -v 2>/dev/null \
-    | sed -n -E 's/.*"((Mac Installer Distribution|3rd Party Mac Developer Installer): [^"]*)".*/\1/p' | head -n 1)"
-  [ -n "$SIGN_ID" ] || { echo "no Apple Distribution identity in the keychain" >&2; exit 1; }
-  [ -n "$INSTALLER_ID" ] || { echo "no Mac installer identity (Mac Installer Distribution) in the keychain" >&2; exit 1; }
+    | sed -n -E 's/.*"((Mac Installer Distribution|3rd Party Mac Developer Installer): [^"]*\('"$TEAM"'\))".*/\1/p' | head -n 1)"
+  [ -n "$SIGN_ID" ] || { echo "no Apple Distribution identity for team $TEAM in the keychain" >&2; exit 1; }
+  [ -n "$INSTALLER_ID" ] || { echo "no Mac installer identity (Mac Installer Distribution) for team $TEAM in the keychain" >&2; exit 1; }
   [ -f src-tauri/embedded.provisionprofile ] || {
     echo "src-tauri/embedded.provisionprofile is missing: download the Mac App Store profile for in.nudge.app" >&2
     exit 1
@@ -53,7 +59,9 @@ BUILD="$(mktemp -d /tmp/nudge-mas.XXXXXX)"
 git clone --quiet --no-hardlinks "$ROOT" "$BUILD/src"
 git -C "$BUILD/src" checkout --quiet --detach "$COMMIT"
 cd "$BUILD/src"
-[ "$LOCAL" -eq 0 ] && cp "$ROOT/src-tauri/embedded.provisionprofile" src-tauri/
+if [ "$LOCAL" -eq 0 ]; then
+  cp "$ROOT/src-tauri/embedded.provisionprofile" src-tauri/
+fi
 
 # cargo is not always on PATH in this environment; fall back to rustup's stable toolchain
 if ! command -v cargo >/dev/null 2>&1; then
@@ -143,6 +151,7 @@ if [ "$LOCAL" -eq 1 ]; then
   sh "$ROOT/scripts/check-mas-bundle.sh" --local "$APP"
   echo "built $COMMIT (local test build, bundle ID in.nudge.maslocal)"
   echo "$APP"
+  echo "delete $BUILD when you are finished with it"
 else
   PKG="$BUILD/Nudge.pkg"
   xcrun productbuild --component "$APP" /Applications --sign "$INSTALLER_ID" "$PKG"
@@ -150,4 +159,5 @@ else
   echo "built $COMMIT"
   echo "$APP"
   echo "$PKG"
+  echo "delete $BUILD when you are finished with it; it holds a copy of the provisioning profile"
 fi

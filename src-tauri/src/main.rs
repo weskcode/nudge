@@ -1,6 +1,9 @@
 // no console window behind the tray app on Windows release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(feature = "mas", any(feature = "launch-agent", feature = "private-api")))]
+compile_error!("the mas feature needs --no-default-features, which drops launch-agent and private-api");
+
 mod diagnostics;
 #[cfg(target_os = "macos")]
 mod key_tap;
@@ -185,7 +188,7 @@ struct Deleted {
 #[derive(Default)]
 struct Problems {
     save: bool,
-    login_item: bool,
+    login_item: Option<String>,
     // the unreadable settings file that was moved aside at launch
     set_aside: Option<String>,
 }
@@ -198,8 +201,8 @@ impl Problems {
             Some(format!(
                 "Your settings file couldn’t be read, so Nudge started with the defaults. The old file is kept as {name}."
             ))
-        } else if self.login_item {
-            Some("Open at login couldn’t be changed.".into())
+        } else if let Some(text) = &self.login_item {
+            Some(text.clone())
         } else {
             None
         }
@@ -1213,9 +1216,9 @@ fn set_config(
         let result = login_item::set_enabled(&app, enable);
         match &result {
             Ok(()) => state.config.lock().unwrap().launch_at_login = enable,
-            Err(error) => println!("launch at login change failed: {error:?}"),
+            Err(error) => println!("launch at login change failed: {error}"),
         }
-        state.problems.lock().unwrap().login_item = result.is_err();
+        state.problems.lock().unwrap().login_item = result.err().map(|error| login_item::problem_text(&error));
     }
     save_config(&app);
     refresh_tray(&app);
@@ -1866,7 +1869,7 @@ mod tests {
     fn a_failed_save_outranks_a_failed_login_item_and_clears_once_fixed() {
         let mut problems = Problems::default();
         assert_eq!(problems.text(), None);
-        problems.login_item = true;
+        problems.login_item = Some(super::login_item::problem_text("any failure"));
         assert!(problems.text().unwrap().contains("Open at login"));
         problems.set_aside = Some("config.json.bad-1".into());
         assert!(problems.text().unwrap().contains("config.json.bad-1"));
@@ -1874,7 +1877,7 @@ mod tests {
         assert!(problems.text().unwrap().contains("couldn’t be saved"));
         problems.set_aside = None;
         problems.save = false;
-        problems.login_item = false;
+        problems.login_item = None;
         assert_eq!(problems.text(), None);
     }
 

@@ -10,6 +10,19 @@ use tauri::{AppHandle, Wry};
 #[cfg(all(not(feature = "launch-agent"), not(target_os = "macos")))]
 compile_error!("open at login needs the launch-agent feature outside macOS");
 
+// the error set_enabled returns when the system waits for the user to allow
+// the login item in System Settings
+pub const NEEDS_APPROVAL: &str = "approve Nudge in System Settings > General > Login Items";
+
+// what Settings shows for a failed change
+pub fn problem_text(error: &str) -> String {
+    if error == NEEDS_APPROVAL {
+        "Open at login needs your approval in System Settings > General > Login Items.".into()
+    } else {
+        "Open at login couldn’t be changed.".into()
+    }
+}
+
 #[cfg(feature = "launch-agent")]
 pub fn plugin() -> TauriPlugin<Wry> {
     tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None)
@@ -46,6 +59,7 @@ pub fn set_enabled(_: &AppHandle, on: bool) -> Result<(), String> {
 
 #[cfg(all(not(feature = "launch-agent"), target_os = "macos"))]
 mod service {
+    use super::NEEDS_APPROVAL;
     use objc2::msg_send;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject};
@@ -60,37 +74,76 @@ mod service {
     pub const ENABLED: isize = 1;
     const REQUIRES_APPROVAL: isize = 2;
 
-    // the class is looked up by name so the app still starts on a macOS that
-    // lacks it, and open at login then reports a failure
+    // looked up by name: no objc2 crate for ServiceManagement is in the lock file
+    fn class() -> Result<&'static AnyClass, String> {
+        AnyClass::get(c"SMAppService").ok_or_else(|| "SMAppService is missing".to_string())
+    }
+
     fn main_app() -> Result<Retained<AnyObject>, String> {
-        let class = AnyClass::get(c"SMAppService").ok_or("SMAppService needs macOS 13")?;
+        let class = class()?;
         // SAFETY: +mainAppService takes no arguments and returns an SMAppService
         let service: Option<Retained<AnyObject>> = unsafe { msg_send![class, mainAppService] };
         service.ok_or_else(|| "no login item service for this app".to_string())
     }
 
-    pub fn status() -> Result<isize, String> {
-        let service = main_app()?;
+    fn status_of(service: &AnyObject) -> isize {
         // SAFETY: -status takes no arguments and returns an NSInteger
-        Ok(unsafe { msg_send![&*service, status] })
+        unsafe { msg_send![service, status] }
+    }
+
+    pub fn status() -> Result<isize, String> {
+        Ok(status_of(&*main_app()?))
+    }
+
+    // after the user switched the item off in System Settings, registering
+    // again does not turn it on; they have to allow it there
+    fn ask_for_approval() -> Result<(), String> {
+        let class = class()?;
+        // SAFETY: +openSystemSettingsLoginItems takes no arguments and returns nothing
+        unsafe {
+            let _: () = msg_send![class, openSystemSettingsLoginItems];
+        }
+        Err(NEEDS_APPROVAL.into())
     }
 
     pub fn set(on: bool) -> Result<(), String> {
         let service = main_app()?;
-        // SAFETY: both methods take only an NSError out-parameter and return BOOL
-        let result: Result<(), Retained<NSError>> = unsafe {
-            if on {
-                msg_send![&*service, registerAndReturnError: _]
-            } else {
-                msg_send![&*service, unregisterAndReturnError: _]
+        let status = status_of(&service);
+        if on {
+            match status {
+                ENABLED => return Ok(()),
+                REQUIRES_APPROVAL => return ask_for_approval(),
+                _ => {}
             }
-        };
-        result.map_err(|error| error.localizedDescription().to_string())?;
-        // registering succeeds while the user still has to approve the item in
-        // System Settings; until then it does not open at login
-        if on && status()? == REQUIRES_APPROVAL {
-            return Err("approve Nudge in System Settings > General > Login Items".into());
+            // SAFETY: the method takes only an NSError out-parameter and returns BOOL
+            let result: Result<(), Retained<NSError>> =
+                unsafe { msg_send![&*service, registerAndReturnError: _] };
+            result.map_err(|error| error.localizedDescription().to_string())?;
+            // registering can succeed while the item still waits for approval
+            if status_of(&service) == REQUIRES_APPROVAL {
+                return ask_for_approval();
+            }
+        } else if status == ENABLED || status == REQUIRES_APPROVAL {
+            // SAFETY: the method takes only an NSError out-parameter and returns BOOL
+            let result: Result<(), Retained<NSError>> =
+                unsafe { msg_send![&*service, unregisterAndReturnError: _] };
+            result.map_err(|error| error.localizedDescription().to_string())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{problem_text, NEEDS_APPROVAL};
+
+    #[test]
+    fn a_login_item_waiting_for_approval_says_where_to_give_it() {
+        assert!(problem_text(NEEDS_APPROVAL).contains("System Settings"));
+    }
+
+    #[test]
+    fn any_other_failure_gets_the_plain_text() {
+        assert_eq!(problem_text("Operation not permitted"), "Open at login couldn’t be changed.");
     }
 }

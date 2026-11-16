@@ -18,7 +18,8 @@ launch-agent = ["dep:tauri-plugin-autostart"]
 # window. tauri-build compares that feature with tauri.conf.json, so it cannot
 # be switched from here; scripts/build-mas.sh builds without it
 private-api = []
-# the Mac App Store build, which can use neither of the two above:
+# the Mac App Store build, which can use neither of the two above. it needs
+# --no-default-features, and the build fails without it:
 #   sh scripts/build-mas.sh
 mas = []
 

@@ -22,10 +22,10 @@ BIN="$APP/Contents/MacOS/$EXECUTABLE"
 WORK="$(mktemp -d /tmp/nudge-mas-check.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
-codesign -d --entitlements - "$APP" > "$WORK/entitlements.txt" 2>/dev/null || true
+codesign -d --entitlements - --xml "$APP" > "$WORK/entitlements.plist" 2>/dev/null || true
 codesign -dvv "$APP" > "$WORK/signature.txt" 2>&1 || true
 strings -a "$BIN" > "$WORK/strings.txt"
-nm -u "$BIN" > "$WORK/imports.txt" 2>/dev/null || true
+nm -u "$BIN" > "$WORK/imports.txt" || { echo "nm failed on $BIN" >&2; exit 2; }
 
 FAILS=0
 pass() { echo "PASS  $1"; }
@@ -51,10 +51,13 @@ lacks() { ! grep -q -E "$1" "$2"; }
 echo "checking $APP"
 
 # signing and sandbox (guideline 2.4.5(i))
-holds "App Sandbox entitlement is set" has 'com.apple.security.app-sandbox' "$WORK/entitlements.txt"
-holds "no temporary-exception entitlements" lacks 'temporary-exception' "$WORK/entitlements.txt"
-signed "application identifier entitlement is set" has 'com.apple.application-identifier' "$WORK/entitlements.txt"
-signed "team identifier entitlement is set" has 'com.apple.developer.team-identifier' "$WORK/entitlements.txt"
+entitlement() { plutil -extract "$1" raw "$WORK/entitlements.plist"; }
+sandboxed() { [ "$(entitlement 'com\.apple\.security\.app-sandbox')" = "true" ]; }
+holds "App Sandbox entitlement is true" sandboxed
+holds "no temporary-exception entitlements" lacks 'temporary-exception' "$WORK/entitlements.plist"
+holds "no get-task-allow entitlement (the store rejects it)" lacks 'get-task-allow' "$WORK/entitlements.plist"
+signed "application identifier entitlement is set" entitlement 'com\.apple\.application-identifier'
+signed "team identifier entitlement is set" entitlement 'com\.apple\.developer\.team-identifier'
 signed "signed with an Apple Distribution identity" has 'Authority=(Apple Distribution|3rd Party Mac Developer Application)' "$WORK/signature.txt"
 signed "provisioning profile is embedded" test -f "$APP/Contents/embedded.provisionprofile"
 
