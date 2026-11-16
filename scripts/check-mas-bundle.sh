@@ -56,8 +56,12 @@ sandboxed() { [ "$(entitlement 'com\.apple\.security\.app-sandbox')" = "true" ];
 holds "App Sandbox entitlement is true" sandboxed
 holds "no temporary-exception entitlements" lacks 'temporary-exception' "$WORK/entitlements.plist"
 holds "no get-task-allow entitlement (the store rejects it)" lacks 'get-task-allow' "$WORK/entitlements.plist"
-signed "application identifier entitlement is set" entitlement 'com\.apple\.application-identifier'
-signed "team identifier entitlement is set" entitlement 'com\.apple\.developer\.team-identifier'
+bundle_id="$(plutil -extract CFBundleIdentifier raw "$PLIST" 2>/dev/null || true)"
+team_id() { entitlement 'com\.apple\.developer\.team-identifier'; }
+identifiers_agree() { [ "$(entitlement 'com\.apple\.application-identifier')" = "$(team_id).$bundle_id" ]; }
+signed_by_team() { grep -q "^TeamIdentifier=$(team_id)\$" "$WORK/signature.txt"; }
+signed "application identifier is the team identifier plus $bundle_id" identifiers_agree
+signed "team identifier matches the signing certificate's team" signed_by_team
 signed "signed with an Apple Distribution identity" has 'Authority=(Apple Distribution|3rd Party Mac Developer Application)' "$WORK/signature.txt"
 signed "provisioning profile is embedded" test -f "$APP/Contents/embedded.provisionprofile"
 
@@ -89,9 +93,13 @@ holds "no private WebKit keys (drawsBackground, fullScreenEnabled)" lacks 'draws
 holds "no LaunchAgents login item code" lacks 'LaunchAgents' "$WORK/strings.txt"
 
 if [ -n "$PKG" ]; then
-  pkgutil --check-signature "$PKG" > "$WORK/pkg.txt" 2>&1 || true
-  holds "installer package is signed with a Mac installer identity" \
-    has 'Mac Installer Distribution|3rd Party Mac Developer Installer' "$WORK/pkg.txt"
+  # pkgutil exits non-zero for an unsigned package, and says when the certificate is not trusted
+  package_signed() {
+    pkgutil --check-signature "$PKG" > "$WORK/pkg.txt" 2>&1 \
+      && grep -q -E 'Mac Installer Distribution|3rd Party Mac Developer Installer' "$WORK/pkg.txt" \
+      && grep -q 'signed by a certificate trusted' "$WORK/pkg.txt"
+  }
+  holds "installer package has a trusted Mac installer signature" package_signed
 fi
 
 echo

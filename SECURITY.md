@@ -17,7 +17,10 @@ Fixes go into the latest release only.
 
 - It reads and writes its settings in `config.json` in your user config
   folder (`~/Library/Application Support/nudge/` on macOS) and writes the
-  chime sound to your user cache folder.
+  chime sound to your user cache folder. The Mac App Store build runs in the
+  App Sandbox, so it keeps both inside its container,
+  `~/Library/Containers/in.nudge.app/Data/Library/`, and starts with its own
+  settings.
 - It keeps local diagnostics by default in a `diagnostics` folder next to
   `config.json`: a journal of counts, fixed step names and coarse durations
   for the last 20 launches, a lock file, and a marker file when you turn the
@@ -37,4 +40,5 @@ Fixes go into the latest release only.
   while no reminder is showing and never records, stores or sends them.
 - Open at login adds a LaunchAgent in `~/Library/LaunchAgents` on macOS, a
   Run entry in the registry on Windows, and an entry in `~/.config/autostart`
-  on Linux.
+  on Linux. The Mac App Store build registers a login item with macOS instead.
+  It shows under System Settings > General > Login Items.

@@ -1061,7 +1061,8 @@ fn play_sound(name: &str) {
             None => return,
         };
         let path = format!("/System/Library/Sounds/{file}.aiff");
-        if std::path::Path::new(&path).exists() {
+        // opened, not stat-ed, so the privacy manifest only has to cover the app's own folder
+        if fs::File::open(&path).is_ok() {
             let _ = ProcCommand::new("afplay").arg(path).spawn();
             return;
         }
