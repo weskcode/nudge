@@ -120,6 +120,20 @@ Published releases are built with `sh scripts/build-release.sh`. It builds
 the signed app from a clean copy of the current commit, removes home folder
 paths from the binary and strips it. Notarizing is a separate step.
 
+The Mac App Store build is made with `sh scripts/build-mas.sh`. It builds from a
+clean copy of the current commit with the `mas` feature. That build runs in the
+App Sandbox, opens at login through `SMAppService` (macOS 13 or later) and leaves
+out the private WebKit keys, so the reminder and Settings windows are opaque
+instead of see-through. The script needs an Apple Distribution identity and a Mac
+installer identity in your keychain, and the Mac App Store provisioning profile for
+`in.nudge.app` saved as `src-tauri/embedded.provisionprofile`. It signs the app and
+builds `Nudge.pkg`. Uploading is a separate step. `--local` makes an ad-hoc signed
+test copy under the bundle ID `in.nudge.maslocal`, which can run beside the
+installed Nudge. `sh scripts/check-mas-bundle.sh path/to/Nudge.app` checks any
+bundle against the store requirements the script knows. Closing a reminder with a
+key typed in another app, through Input Monitoring, has not been shown to work in
+the sandbox. A click, Done, or a key typed while the reminder has focus does.
+
 ## Permissions (macOS)
 
 To close the reminder with any key while another app is frontmost, Nudge
