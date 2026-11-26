@@ -123,6 +123,9 @@ fi
 # shellcheck disable=SC2086
 npm run tauri build -- --no-bundle $CONFIGS -- --locked --no-default-features --features mas
 
+# The build has now populated the Cargo cache used by the offline scan.
+sh scripts/check-no-network.sh --mas-source
+
 # strip = true in Cargo.toml runs rust-objcopy, which can fail without failing
 # the build, so strip here before the bundle is signed
 BIN=src-tauri/target/release/nudge
@@ -139,23 +142,25 @@ fi
 if [ "$LOCAL" -eq 1 ]; then
   codesign --force --sign - --entitlements "$BUILD/local.entitlements.plist" "$APP"
 fi
-# not grep -q: it exits at the first match, strings then dies of SIGPIPE, and
-# pipefail turns that into a failed pipeline, which would skip this check
-if strings -a "$APP/Contents/MacOS/nudge" | grep '/Users/' >/dev/null; then
-  echo "the binary still contains a /Users/ path" >&2
-  exit 1
-fi
+# Read the whole stream. With pipefail, a strings error also stops packaging.
+strings -a "$APP/Contents/MacOS/nudge" | LC_ALL=C awk '
+  /\/Users\// { found = 1 }
+  END {
+    if (found) print "the binary still contains a /Users/ path" > "/dev/stderr"
+    exit found
+  }
+' || { echo "binary path inspection failed" >&2; exit 1; }
 codesign --verify --strict "$APP"
 
 if [ "$LOCAL" -eq 1 ]; then
-  sh "$ROOT/scripts/check-mas-bundle.sh" --local "$APP"
+  sh scripts/check-mas-bundle.sh --local "$APP"
   echo "built $COMMIT (local test build, bundle ID in.nudge.maslocal)"
   echo "$APP"
   echo "delete $BUILD when you are finished with it"
 else
   PKG="$BUILD/Nudge.pkg"
   xcrun productbuild --component "$APP" /Applications --sign "$INSTALLER_ID" "$PKG"
-  sh "$ROOT/scripts/check-mas-bundle.sh" "$APP" "$PKG"
+  sh scripts/check-mas-bundle.sh "$APP" "$PKG"
   echo "built $COMMIT"
   echo "$APP"
   echo "$PKG"

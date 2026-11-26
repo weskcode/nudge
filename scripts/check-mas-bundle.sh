@@ -24,7 +24,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 codesign -d --entitlements - --xml "$APP" > "$WORK/entitlements.plist" 2>/dev/null || true
 codesign -dvv "$APP" > "$WORK/signature.txt" 2>&1 || true
-strings -a "$BIN" > "$WORK/strings.txt"
+strings -a "$BIN" > "$WORK/strings.txt" && [ -s "$WORK/strings.txt" ] || {
+  echo "could not read binary strings from $BIN" >&2
+  exit 2
+}
 nm -u "$BIN" > "$WORK/imports.txt" || { echo "nm failed on $BIN" >&2; exit 2; }
 
 FAILS=0
@@ -46,7 +49,19 @@ signed() {
   if [ "$LOCAL" -eq 1 ]; then echo "SKIP  $1 (local build)"; else holds "$@"; fi
 }
 has() { grep -q -E "$1" "$2"; }
-lacks() { ! grep -q -E "$1" "$2"; }
+check_absent() {
+  if [ ! -s "$3" ]; then
+    echo "missing input for $1: $3" >&2
+    exit 2
+  fi
+  if grep -E "$2" "$3" >/dev/null; then
+    fail "$1"
+  else
+    status=$?
+    [ "$status" -eq 1 ] || { echo "search failed for $1" >&2; exit 2; }
+    pass "$1"
+  fi
+}
 
 echo "checking $APP"
 
@@ -54,8 +69,8 @@ echo "checking $APP"
 entitlement() { plutil -extract "$1" raw "$WORK/entitlements.plist"; }
 sandboxed() { [ "$(entitlement 'com\.apple\.security\.app-sandbox')" = "true" ]; }
 holds "App Sandbox entitlement is true" sandboxed
-holds "no temporary-exception entitlements" lacks 'temporary-exception' "$WORK/entitlements.plist"
-holds "no get-task-allow entitlement (the store rejects it)" lacks 'get-task-allow' "$WORK/entitlements.plist"
+check_absent "no temporary-exception entitlements" 'temporary-exception' "$WORK/entitlements.plist"
+check_absent "no get-task-allow entitlement (the store rejects it)" 'get-task-allow' "$WORK/entitlements.plist"
 bundle_id="$(plutil -extract CFBundleIdentifier raw "$PLIST" 2>/dev/null || true)"
 team_id() { entitlement 'com\.apple\.developer\.team-identifier'; }
 identifiers_agree() { [ "$(entitlement 'com\.apple\.application-identifier')" = "$(team_id).$bundle_id" ]; }
@@ -68,9 +83,12 @@ signed "provisioning profile is embedded" test -f "$APP/Contents/embedded.provis
 # Info.plist keys App Store Connect validates
 holds "LSApplicationCategoryType is set" plutil -extract LSApplicationCategoryType raw "$PLIST"
 holds "ITSAppUsesNonExemptEncryption is set" plutil -extract ITSAppUsesNonExemptEncryption raw "$PLIST"
-version="$(plutil -extract CFBundleVersion raw "$PLIST" 2>/dev/null || true)"
-holds "CFBundleVersion is one to three dotted integers (got '$version')" \
-  sh -c "printf '%s' '$version' | grep -q -E '^[0-9]+(\.[0-9]+){0,2}\$'"
+valid_version() {
+  plutil -extract CFBundleVersion raw -expect string -o "$WORK/version.txt" "$PLIST" || return 1
+  LC_ALL=C awk 'NR == 1 && /^[0-9]+([.][0-9]+)?([.][0-9]+)?$/ { valid = 1 }
+                END { exit !(NR == 1 && valid) }' "$WORK/version.txt"
+}
+holds "CFBundleVersion is one to three dotted integers" valid_version
 
 # icon: the bundle's icns needs a 512x512@2x (1024 px) image
 icon="$(plutil -extract CFBundleIconFile raw "$PLIST" 2>/dev/null || true)"
@@ -89,8 +107,8 @@ if has '^_(stat|lstat|fstat)(64)?$' "$WORK/imports.txt"; then
 fi
 
 # public APIs only (guideline 2.5.1) and a sandbox-safe login item (guideline 2.4.5(iii))
-holds "no private WebKit keys (drawsBackground, fullScreenEnabled)" lacks 'drawsBackground|fullScreenEnabled' "$WORK/strings.txt"
-holds "no LaunchAgents login item code" lacks 'LaunchAgents' "$WORK/strings.txt"
+check_absent "no private WebKit keys (drawsBackground, fullScreenEnabled)" 'drawsBackground|fullScreenEnabled' "$WORK/strings.txt"
+check_absent "no LaunchAgents login item code" 'LaunchAgents' "$WORK/strings.txt"
 
 if [ -n "$PKG" ]; then
   # pkgutil exits non-zero for an unsigned package, and says when the certificate is not trusted
@@ -101,6 +119,16 @@ if [ -n "$PKG" ]; then
   }
   holds "installer package has a trusted Mac installer signature" package_signed
 fi
+
+# Keep the scanner's findings and tool errors visible in the build log.
+scan_status=0
+sh "$(dirname "$0")/check-no-network.sh" --binary-only "$APP" || scan_status=$?
+case "$scan_status" in
+  0) ;;
+  1) fail "network scan flagged a listed import or library (see output above)" ;;
+  *) echo "network scan could not complete (exit $scan_status; see error above)" >&2
+     exit "$scan_status" ;;
+esac
 
 echo
 if [ "$FAILS" -eq 0 ]; then
