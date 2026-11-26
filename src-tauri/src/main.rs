@@ -368,14 +368,21 @@ fn save_config(app: &AppHandle) {
     state.problems.lock().unwrap().save = result.is_err();
 }
 
-// write beside the file, then rename over it, so a write that fails part way
-// (a full disk, say) leaves the old settings whole rather than a cut-off file
+// write beside the file, flush it to disk, then rename over it, so a write that
+// fails part way (a full disk, say) or a power loss just after the rename leaves
+// the old settings whole rather than a cut-off or empty file
 fn replace_file(path: &std::path::Path, text: &str, recovery_failed: bool) -> std::io::Result<()> {
     if recovery_failed {
         return Ok(());
     }
     let temp = path.with_extension("json.tmp");
-    let result = private_fs::write(&temp, text.as_bytes()).and_then(|_| fs::rename(&temp, path));
+    let result = (|| {
+        use std::io::Write;
+        let mut file = private_fs::create(&temp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&temp, path)
+    })();
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }

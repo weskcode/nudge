@@ -477,7 +477,7 @@ function flushIntervalSave() {
   clearTimeout(intervalSave.timer);
   const { id, secs } = intervalSave;
   intervalSave = null;
-  return call("set_nudge", { id, intervalSecs: secs });
+  call("set_nudge", { id, intervalSecs: secs });
 }
 $("interval").addEventListener("pointerdown", () => (intervalClicked = true));
 // a press that changed nothing must not make the next arrow key count as a click
