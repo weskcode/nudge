@@ -8,6 +8,7 @@ mod diagnostics;
 #[cfg(target_os = "macos")]
 mod key_tap;
 mod login_item;
+mod private_fs;
 mod schedule;
 
 use diagnostics::Phase;
@@ -187,6 +188,8 @@ struct Deleted {
 // what last failed; each clears when the same kind of change next succeeds
 #[derive(Default)]
 struct Problems {
+    // A failed recovery rename protects the original for this entire run.
+    recovery_failed: bool,
     save: bool,
     login_item: Option<String>,
     // the unreadable settings file that was moved aside at launch
@@ -195,7 +198,9 @@ struct Problems {
 
 impl Problems {
     fn text(&self) -> Option<String> {
-        if self.save {
+        if self.recovery_failed {
+            Some("Nudge couldn’t read or move your settings file. Reminder changes last only until you quit. Repair or move config.json, then reopen Nudge.".into())
+        } else if self.save {
             Some("Settings couldn’t be saved, so changes will be lost when Nudge quits.".into())
         } else if let Some(name) = &self.set_aside {
             Some(format!(
@@ -216,18 +221,25 @@ const DISMISS_GRACE: Duration = Duration::from_millis(1500);
 
 // the folder Nudge keeps its files in. a debug build can be pointed elsewhere
 // with NUDGE_TEST_DATA_DIR, so a test copy never touches real settings
-fn data_dir() -> Option<PathBuf> {
+fn test_data_dir() -> Option<PathBuf> {
     #[cfg(debug_assertions)]
-    if let Some(dir) = std::env::var_os("NUDGE_TEST_DATA_DIR").filter(|dir| !dir.is_empty()) {
-        return Some(PathBuf::from(dir));
+    {
+        std::env::var_os("NUDGE_TEST_DATA_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from)
     }
-    Some(dirs::config_dir()?.join("nudge"))
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
+fn data_dir() -> Option<PathBuf> {
+    test_data_dir().or_else(|| dirs::config_dir().map(|dir| dir.join("nudge")))
 }
 
 // None only without a home folder; a failed create_dir_all shows up when the save fails
 fn config_path() -> Option<PathBuf> {
     let dir = data_dir()?;
-    let _ = fs::create_dir_all(&dir);
+    let _ = private_fs::create_dir_all(&dir);
     Some(dir.join("config.json"))
 }
 
@@ -310,21 +322,21 @@ fn config_json(config: &Config) -> serde_json::Value {
     value
 }
 
-fn load_config() -> (Config, Option<PathBuf>) {
-    config_path().map(|path| load_from(&path)).unwrap_or_default()
+fn load_config() -> std::io::Result<(Config, Option<PathBuf>)> {
+    config_path().map(|path| load_from(&path)).transpose().map(Option::unwrap_or_default)
 }
 
 // a file that exists but can't be read (a bad hand edit, one in another text
 // encoding, or one written by a newer version) is moved aside rather than left
 // for the next save to replace; returns where it went
-fn load_from(path: &std::path::Path) -> (Config, Option<PathBuf>) {
+fn load_from(path: &std::path::Path) -> std::io::Result<(Config, Option<PathBuf>)> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (Config::default(), None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Config::default(), None)),
         Err(_) => Vec::new(),
     };
     if let Some(config) = String::from_utf8(bytes).ok().and_then(|text| parse_config(&text)) {
-        return (config, None);
+        return Ok((config, None));
     }
     let stamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -335,24 +347,18 @@ fn load_from(path: &std::path::Path) -> (Config, Option<PathBuf>) {
         n += 1;
         kept = path.with_file_name(format!("config.json.bad-{stamp}-{n}"));
     }
-    match fs::rename(path, &kept) {
-        Ok(()) => {
-            println!("settings could not be read; kept them as {}", kept.display());
-            (Config::default(), Some(kept))
-        }
-        Err(error) => {
-            println!("settings could not be read or kept aside: {error:?}");
-            (Config::default(), None)
-        }
-    }
+    fs::rename(path, &kept)?;
+    println!("settings could not be read; kept them as {}", kept.display());
+    Ok((Config::default(), Some(kept)))
 }
 
 fn save_config(app: &AppHandle) {
     let _step = diagnostics::span(Phase::ConfigSave);
     let state = app.state::<App>();
+    let recovery_failed = state.problems.lock().unwrap().recovery_failed;
     let json = config_json(&state.config.lock().unwrap());
     let result = match (serde_json::to_string_pretty(&json), config_path()) {
-        (Ok(text), Some(path)) => replace_file(&path, &text),
+        (Ok(text), Some(path)) => replace_file(&path, &text, recovery_failed),
         (Err(error), _) => Err(std::io::Error::other(error)),
         (_, None) => Err(std::io::Error::other("no config folder")),
     };
@@ -364,9 +370,12 @@ fn save_config(app: &AppHandle) {
 
 // write beside the file, then rename over it, so a write that fails part way
 // (a full disk, say) leaves the old settings whole rather than a cut-off file
-fn replace_file(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+fn replace_file(path: &std::path::Path, text: &str, recovery_failed: bool) -> std::io::Result<()> {
+    if recovery_failed {
+        return Ok(());
+    }
     let temp = path.with_extension("json.tmp");
-    let result = fs::write(&temp, text).and_then(|_| fs::rename(&temp, path));
+    let result = private_fs::write(&temp, text.as_bytes()).and_then(|_| fs::rename(&temp, path));
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
@@ -677,13 +686,18 @@ fn show_overlay(app: &AppHandle, look: u32, due: Vec<u32>, counted: bool) -> boo
     let primary = opened.first().cloned();
     #[cfg(target_os = "macos")]
     let opened_labels = opened.clone();
-    state.schedule.lock().unwrap().open(Showing {
+    let mut schedule = state.schedule.lock().unwrap();
+    schedule.open(Showing {
         look,
         due,
         seq,
         windows: opened,
         shown_at: Instant::now(),
     });
+    // any key may now dismiss it, so the key tap listens until it closes
+    #[cfg(target_os = "macos")]
+    key_tap::set_active(true);
+    drop(schedule);
 
     // a page that never asks for its fade must not leave the reminder invisible
     #[cfg(target_os = "macos")]
@@ -759,7 +773,13 @@ const LEAVE_MS: u64 = 220;
 
 // take the reminder off every screen; the caller decides what its nudges do next
 fn close_windows(app: &AppHandle) -> Option<Showing> {
-    let shown = app.state::<App>().schedule.lock().unwrap().close()?;
+    let state = app.state::<App>();
+    let mut schedule = state.schedule.lock().unwrap();
+    let shown = schedule.close()?;
+    // nothing is left to dismiss, so key presses are no longer wanted
+    #[cfg(target_os = "macos")]
+    key_tap::set_active(false);
+    drop(schedule);
     // on macOS the windows fade out on every screen first; one that never
     // became visible closes at once
     #[cfg(target_os = "macos")]
@@ -1169,21 +1189,39 @@ fn quiet(mut command: ProcCommand) -> ProcCommand {
     command
 }
 
-fn open_url(url: &str) {
-    let result = if cfg!(target_os = "macos") {
-        ProcCommand::new("open").arg(url).spawn()
-    } else if cfg!(target_os = "windows") {
-        quiet(ProcCommand::new("cmd")).args(["/c", "start", "", url]).spawn()
+// Only fixed destinations reach the system launcher. No diagnostic text or
+// other user input belongs in a browser request.
+const ISSUE_URL: &str = "https://github.com/weskcode/nudge/issues/new";
+
+fn browser_result(status: std::io::Result<std::process::ExitStatus>) -> Result<(), String> {
+    let status = status.map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
     } else {
-        ProcCommand::new("xdg-open").arg(url).spawn()
-    };
-    let _ = result;
+        Err(format!("browser launcher exited with {status}"))
+    }
 }
 
-// fixed destination only: the page never passes a URL to open
+async fn open_url(url: &'static str) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let status = ProcCommand::new("open").arg(url).status();
+        #[cfg(windows)]
+        let status = quiet(ProcCommand::new("cmd")).args(["/c", "start", "", url]).status();
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let status = ProcCommand::new("xdg-open").arg(url).status();
+        browser_result(status)
+    }).await.map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
-fn open_credits() {
-    open_url(CREDITS_URL);
+async fn open_credits() -> Result<(), String> {
+    open_url(CREDITS_URL).await
+}
+
+#[tauri::command]
+async fn open_issue() -> Result<(), String> {
+    open_url(ISSUE_URL).await
 }
 
 #[tauri::command]
@@ -1562,6 +1600,12 @@ fn open_settings(app: AppHandle) {
 }
 
 fn main() {
+    // A test override can name a shared folder. Never migrate its permissions.
+    if test_data_dir().is_none() {
+        if let Some(dir) = data_dir() {
+            private_fs::tighten(&dir);
+        }
+    }
     diagnostics::init(data_dir());
     let app = tauri::Builder::default()
         .plugin(login_item::plugin())
@@ -1594,6 +1638,7 @@ fn main() {
             preview_sound,
             open_settings,
             open_credits,
+            open_issue,
             diagnostics::get_diagnostics,
             diagnostics::set_diagnostics,
             diagnostics::review_diagnostics
@@ -1630,7 +1675,14 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let handle = app.handle().clone();
-            let (mut config, set_aside) = load_config();
+            let (mut config, set_aside) = match load_config() {
+                Ok(loaded) => loaded,
+                Err(error) => {
+                    println!("settings recovery failed: {error:?}");
+                    app.state::<App>().problems.lock().unwrap().recovery_failed = true;
+                    (Config::default(), None)
+                }
+            };
             app.state::<App>().problems.lock().unwrap().set_aside =
                 set_aside.and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()));
             // the login item can be removed outside the app (System Settings),
@@ -1844,11 +1896,11 @@ mod tests {
         let path = dir.join("config.json");
 
         // no file yet: defaults, and nothing set aside
-        assert_eq!(load_from(&path), (Config::default(), None));
+        assert_eq!(load_from(&path).unwrap(), (Config::default(), None));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
 
         std::fs::write(&path, "{ not json").unwrap();
-        let (config, kept) = load_from(&path);
+        let (config, kept) = load_from(&path).unwrap();
         assert_eq!(config, Config::default());
         assert!(!path.exists(), "the unreadable file must be moved, so a save can't destroy it");
         let kept = kept.expect("it says where the file went");
@@ -1858,12 +1910,34 @@ mod tests {
         // a file in another text encoding is set aside too, under a name that
         // doesn't replace the first one even within the same second
         std::fs::write(&path, b"{\"nudges\":[{\"message\":\"caf\xe9\"}]}").unwrap();
-        let (_, second) = load_from(&path);
+        let (_, second) = load_from(&path).unwrap();
         let second = second.expect("a non-UTF-8 file is set aside");
         assert_ne!(second, kept);
         assert!(kept.exists() && second.exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_recovery_is_distinct_from_missing_settings() {
+        // A regular file cannot contain config.json or its recovery file.
+        let parent = std::env::current_exe().unwrap();
+        assert!(load_from(&parent.join("config.json")).is_err());
+        let problems = Problems { recovery_failed: true, ..Problems::default() };
+        assert!(problems.text().unwrap().contains("Reminder changes last only until you quit"));
+    }
+
+    #[test]
+    fn a_save_after_failed_recovery_preserves_the_original_bytes() {
+        let dir = std::env::temp_dir().join(format!("nudge-protected-save-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("config.json");
+        let original = b"unreadable settings: \xff";
+        std::fs::write(&path, original).unwrap();
+        replace_file(&path, "new settings", true).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap().as_slice(), original);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1880,6 +1954,28 @@ mod tests {
         problems.save = false;
         problems.login_item = None;
         assert_eq!(problems.text(), None);
+    }
+
+    #[test]
+    fn report_destination_has_no_report_or_query_parameters() {
+        assert_eq!(super::ISSUE_URL, "https://github.com/weskcode/nudge/issues/new");
+    }
+
+    #[test]
+    fn browser_launcher_start_failure_reaches_settings() {
+        let error = std::io::Error::new(std::io::ErrorKind::NotFound, "launcher missing");
+        assert_eq!(super::browser_result(Err(error)), Err("launcher missing".into()));
+    }
+
+    #[test]
+    fn browser_launcher_exit_status_reaches_settings() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        use std::process::ExitStatus;
+        assert!(super::browser_result(Ok(ExitStatus::from_raw(0))).is_ok());
+        assert!(super::browser_result(Ok(ExitStatus::from_raw(256))).is_err());
     }
 
     #[test]
@@ -2040,14 +2136,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.json");
 
-        replace_file(&path, "old").unwrap();
-        replace_file(&path, "new").unwrap();
+        replace_file(&path, "old", false).unwrap();
+        replace_file(&path, "new", false).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
         assert!(!dir.join("config.json.tmp").exists());
 
         // a directory where the temp file goes makes the write fail
         std::fs::create_dir(dir.join("config.json.tmp")).unwrap();
-        assert!(replace_file(&path, "lost").is_err());
+        assert!(replace_file(&path, "lost", false).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
 
         // a directory in the file's place makes the rename fail after the
@@ -2055,7 +2151,7 @@ mod tests {
         let blocked = dir.join("blocked.json");
         std::fs::create_dir(&blocked).unwrap();
         std::fs::write(blocked.join("inside"), "").unwrap();
-        assert!(replace_file(&blocked, "lost").is_err());
+        assert!(replace_file(&blocked, "lost", false).is_err());
         assert!(!dir.join("blocked.json.tmp").exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
