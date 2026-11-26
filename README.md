@@ -130,7 +130,10 @@ installer identity in your keychain, and the Mac App Store provisioning profile 
 builds `Nudge.pkg`. Uploading is a separate step. `--local` makes an ad-hoc signed
 test copy under the bundle ID `in.nudge.maslocal`, which can run beside the
 installed Nudge. `sh scripts/check-mas-bundle.sh path/to/Nudge.app` checks any
-bundle against the store requirements the script knows. Closing a reminder with a
+bundle against the store requirements the script knows. This standalone check
+inspects the executable without Cargo. Pass the installer package as a second
+argument to check its signature too. During packaging, the build also checks the
+Store dependency graph in the checkout it compiles. Closing a reminder with a
 key typed in another app, through Input Monitoring, has not been shown to work in
 the sandbox. A click, Done, or a key typed while the reminder has focus does.
 
@@ -139,8 +142,9 @@ the sandbox. A click, Done, or a key typed while the reminder has focus does.
 To close the reminder with any key while another app is frontmost, Nudge
 needs Input Monitoring (System Settings > Privacy & Security > Input
 Monitoring). Without it, the reminder still closes with a click, the Done
-button, or a key typed while the reminder has focus. Open at login installs a
-LaunchAgent in `~/Library/LaunchAgents`.
+button, or a key typed while the reminder has focus. The key listener runs only
+while a reminder is showing. Open at login installs a LaunchAgent in
+`~/Library/LaunchAgents`.
 
 ## Diagnostics
 
@@ -161,8 +165,10 @@ Settings > General shows three counts over the last 20 launches:
   shutdown is recorded the same way. A launch still counts as unclean if the
   record cannot be written in time.
 
-Review diagnostics shows the exact text that would be shared, and Copy report
-copies that text. Whether to send it to anyone is up to you.
+Review diagnostics shows the report. Copy report copies that text to the clipboard.
+Open GitHub issue opens GitHub in your browser. Paste the report there
+only if you want to share it. Settings > General also links to the
+[privacy policy](PRIVACY.md), which you can read offline.
 
 The record holds counts, fixed step names such as "saving settings" and coarse
 durations. A freeze while Nudge is quitting is named "quitting". The record holds
