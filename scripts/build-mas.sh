@@ -143,13 +143,15 @@ if [ "$LOCAL" -eq 1 ]; then
   codesign --force --sign - --entitlements "$BUILD/local.entitlements.plist" "$APP"
 fi
 # Read the whole stream. With pipefail, a strings error also stops packaging.
-strings -a "$APP/Contents/MacOS/nudge" | LC_ALL=C awk '
-  /\/Users\// { found = 1 }
-  END {
-    if (found) print "the binary still contains a /Users/ path" > "/dev/stderr"
-    exit found
-  }
-' || { echo "binary path inspection failed" >&2; exit 1; }
+# awk exits 3 for a match, so a failed inspection is told apart from a found path
+path_status=0
+strings -a "$APP/Contents/MacOS/nudge" | LC_ALL=C awk '/\/Users\// { found = 1 } END { exit found ? 3 : 0 }' \
+  || path_status=$?
+case "$path_status" in
+  0) ;;
+  3) echo "the binary still contains a /Users/ path" >&2; exit 1 ;;
+  *) echo "binary path inspection failed (exit $path_status)" >&2; exit 1 ;;
+esac
 codesign --verify --strict "$APP"
 
 if [ "$LOCAL" -eq 1 ]; then

@@ -58,8 +58,8 @@ Closing a reminder with any key, while another app is in front, needs the macOS
 Input Monitoring permission. It is optional. Without it, a click, the Done
 button, or a key typed while the reminder has focus all close it.
 
-With the permission, Nudge listens for key presses only while a reminder is on
-screen. It checks the key code and modifier flags to recognize shortcuts.
+With the permission, Nudge switches its key listener on only while a reminder
+is on screen, and ignores key presses at other times. It checks the key code and modifier flags to recognize shortcuts.
 Nudge does not store or send keystrokes. You can revoke Input Monitoring
 in System Settings under Privacy & Security.
 

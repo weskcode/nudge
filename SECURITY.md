@@ -39,8 +39,9 @@ Fixes go into the latest release only.
   issue open your browser. The issue URL contains no report. You choose
   whether to paste diagnostics into the form.
 - On macOS, with Input Monitoring allowed, it is told the key code of each
-  key press so that any key can close a reminder. The key listener is on only
-  while a reminder is showing, and it never records, stores or sends key presses.
+  key press so that any key can close a reminder. Nudge switches the key
+  listener on only while a reminder is showing, ignores key presses at other
+  times, and never records, stores or sends them.
 - Open at login adds a LaunchAgent in `~/Library/LaunchAgents` on macOS, a
   Run entry in the registry on Windows, and an entry in `~/.config/autostart`
   on Linux. The Mac App Store build registers a login item with macOS instead.

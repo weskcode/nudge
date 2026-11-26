@@ -3,7 +3,8 @@
 // its own thread, and macOS 27 kills an app that does that off the main
 // thread. this reads only the key code, so it never touches the layout.
 // the tap is switched on only while a reminder is on screen (set_active), so
-// the rest of the time macOS delivers no key press to Nudge at all
+// the rest of the time it is off. a new tap starts on, so the callback also
+// ignores the few key presses that could reach it before launch turns it off
 
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};

@@ -1193,6 +1193,7 @@ fn quiet(mut command: ProcCommand) -> ProcCommand {
 // other user input belongs in a browser request.
 const ISSUE_URL: &str = "https://github.com/weskcode/nudge/issues/new";
 
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 fn browser_result(status: std::io::Result<std::process::ExitStatus>) -> Result<(), String> {
     let status = status.map_err(|error| error.to_string())?;
     if status.success() {
@@ -1202,16 +1203,29 @@ fn browser_result(status: std::io::Result<std::process::ExitStatus>) -> Result<(
     }
 }
 
+// open and start return as soon as the browser has the address
+#[cfg(any(target_os = "macos", windows))]
+fn launch(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status = ProcCommand::new("open").arg(url).status();
+    #[cfg(windows)]
+    let status = quiet(ProcCommand::new("cmd")).args(["/c", "start", "", url]).status();
+    browser_result(status)
+}
+
+// xdg-open can wait until a browser it started quits, so only its start is
+// reported, and it is reaped on its own thread
+#[cfg(not(any(target_os = "macos", windows)))]
+fn launch(url: &str) -> Result<(), String> {
+    let mut child = ProcCommand::new("xdg-open").arg(url).spawn().map_err(|error| error.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 async fn open_url(url: &'static str) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(target_os = "macos")]
-        let status = ProcCommand::new("open").arg(url).status();
-        #[cfg(windows)]
-        let status = quiet(ProcCommand::new("cmd")).args(["/c", "start", "", url]).status();
-        #[cfg(not(any(target_os = "macos", windows)))]
-        let status = ProcCommand::new("xdg-open").arg(url).status();
-        browser_result(status)
-    }).await.map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || launch(url)).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

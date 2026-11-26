@@ -142,8 +142,9 @@ the sandbox. A click, Done, or a key typed while the reminder has focus does.
 To close the reminder with any key while another app is frontmost, Nudge
 needs Input Monitoring (System Settings > Privacy & Security > Input
 Monitoring). Without it, the reminder still closes with a click, the Done
-button, or a key typed while the reminder has focus. The key listener runs only
-while a reminder is showing. Open at login installs a LaunchAgent in
+button, or a key typed while the reminder has focus. Nudge switches its key
+listener on only while a reminder is showing, and ignores key presses at other
+times. Open at login installs a LaunchAgent in
 `~/Library/LaunchAgents`.
 
 ## Diagnostics
@@ -167,8 +168,9 @@ Settings > General shows three counts over the last 20 launches:
 
 Review diagnostics shows the report. Copy report copies that text to the clipboard.
 Open GitHub issue opens GitHub in your browser. Paste the report there
-only if you want to share it. Settings > General also links to the
-[privacy policy](PRIVACY.md), which you can read offline.
+only if you want to share it. Settings > General also shows a short privacy
+policy inside the app, which you can read offline. [PRIVACY.md](PRIVACY.md) is the
+full version, with steps to check each claim.
 
 The record holds counts, fixed step names such as "saving settings" and coarse
 durations. A freeze while Nudge is quitting is named "quitting". The record holds
