@@ -25,7 +25,7 @@ report a security problem.
 
 On macOS these live in `~/Library/Application Support/nudge/` and
 `~/Library/Caches/nudge/`. The Mac App Store build runs in the App Sandbox, so it
-keeps them inside its container, `~/Library/Containers/in.nudge.app/Data/Library/`,
+keeps them inside its container, `~/Library/Containers/com.weskcode.nudge/Data/Library/`,
 and starts with its own settings. On macOS and Linux, Nudge requests owner-only
 permissions for new settings and diagnostics files (600) and their folders (700). The chime cache
 uses the system defaults. On Windows and Linux the folders are in your user

@@ -126,7 +126,9 @@ App Sandbox, opens at login through `SMAppService` (macOS 13 or later) and leave
 out the private WebKit keys, so the reminder and Settings windows are opaque
 instead of see-through. The script needs an Apple Distribution identity and a Mac
 installer identity in your keychain, and the Mac App Store provisioning profile for
-`in.nudge.app` saved as `src-tauri/embedded.provisionprofile`. It signs the app and
+`com.weskcode.nudge` saved as `src-tauri/embedded.provisionprofile`. The store build
+uses that bundle ID because another team registered `in.nudge.app`; the Developer
+ID build keeps `in.nudge.app`, so its permissions and login item carry over. It signs the app and
 builds `Nudge.pkg`. Uploading is a separate step. `--local` makes an ad-hoc signed
 test copy under the bundle ID `in.nudge.maslocal`, which can run beside the
 installed Nudge. `sh scripts/check-mas-bundle.sh path/to/Nudge.app` checks any

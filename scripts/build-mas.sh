@@ -4,7 +4,7 @@
 #
 # Without --local it needs, and checks for, three things from your Apple developer
 # account: an Apple Distribution identity and a Mac installer identity in the
-# keychain, and a Mac App Store provisioning profile for in.nudge.app saved as
+# keychain, and a Mac App Store provisioning profile for com.weskcode.nudge saved as
 # src-tauri/embedded.provisionprofile (git ignores it). It signs the app, then builds
 # a signed Nudge.pkg with productbuild. Uploading is a separate step.
 #
@@ -48,7 +48,7 @@ if [ "$LOCAL" -eq 0 ]; then
   [ -n "$SIGN_ID" ] || { echo "no Apple Distribution identity for team $TEAM in the keychain" >&2; exit 1; }
   [ -n "$INSTALLER_ID" ] || { echo "no Mac installer identity (Mac Installer Distribution) for team $TEAM in the keychain" >&2; exit 1; }
   [ -f src-tauri/embedded.provisionprofile ] || {
-    echo "src-tauri/embedded.provisionprofile is missing: download the Mac App Store profile for in.nudge.app" >&2
+    echo "src-tauri/embedded.provisionprofile is missing: download the Mac App Store profile for com.weskcode.nudge" >&2
     exit 1
   }
 fi

@@ -19,7 +19,7 @@ Fixes go into the latest release only.
   folder (`~/Library/Application Support/nudge/` on macOS) and writes the
   chime sound to your user cache folder. The Mac App Store build runs in the
   App Sandbox, so it keeps both inside its container,
-  `~/Library/Containers/in.nudge.app/Data/Library/`, and starts with its own
+  `~/Library/Containers/com.weskcode.nudge/Data/Library/`, and starts with its own
   settings. If Nudge cannot read or parse its settings, it tries to move the
   file aside as `config.json.bad-*` in the same folder. These files can hold
   reminder text and stay until you remove them. If the move fails, Nudge leaves
