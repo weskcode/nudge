@@ -550,7 +550,9 @@ fn refresh_tray(app: &AppHandle) {
         } else {
             tauri::include_image!("icons/tray-off.png")
         };
-        let _ = tray.set_icon(Some(icon));
+        // plain set_icon clears the template flag on macOS, which leaves the
+        // bell black on a dark menu bar
+        let _ = tray.set_icon_with_as_template(Some(icon), cfg!(target_os = "macos"));
     }
 }
 
