@@ -318,7 +318,7 @@
             </div>
             <div class="row">
               <span class="tile t-gray"><svg><use href="#i-eye"/></svg></span>
-              <span class="text"><span id="l-review">See what would be shared</span><small id="diag-scope"></small></span>
+              <span class="text"><span id="l-review">Local diagnostics report</span><small id="diag-scope"></small></span>
               <button id="review-diagnostics" type="button" aria-expanded="false" aria-controls="diagnostics-report">Review diagnostics</button>
             </div>
           </div>
@@ -328,6 +328,7 @@
             <div class="report-bar">
               <small id="report-note" role="status"></small>
               <button id="copy-report" type="button">Copy report</button>
+              <button id="open-issue" type="button">Open GitHub issue</button>
               <button id="close-report" type="button">Close</button>
             </div>
           </div>
@@ -336,12 +337,18 @@
             <img src="app-icon.png" alt="" width="56" height="56" />
             <b>Nudge</b>
             <span id="version"></span>
+            <button id="privacy-link" type="button" aria-haspopup="dialog">Privacy policy</button>
             <span>Inspired by <a href="#" id="credits">remindful</a></span>
+            <span id="about-status" role="status"></span>
           </div>
         </section>
       </div>
     </main>
   </div>
+  <dialog id="privacy-dialog" aria-label="Privacy policy">
+    <form method="dialog"><button autofocus>Back to Settings</button></form>
+    <iframe src="privacy.html" title="Nudge privacy policy"></iframe>
+  </dialog>
   <script src="main.js"></script>
 </body>
 </html>

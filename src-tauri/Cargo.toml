@@ -9,6 +9,20 @@ license = "MIT"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+default = ["launch-agent", "private-api"]
+# open at login through the autostart plugin: a LaunchAgent on macOS
+launch-agent = ["dep:tauri-plugin-autostart"]
+# marks the code that needs tauri's macos-private-api feature below: the
+# transparent windows behind the frosted reminder and the sidebar Settings
+# window. tauri-build compares that feature with tauri.conf.json, so it cannot
+# be switched from here; scripts/build-mas.sh builds without it
+private-api = []
+# the Mac App Store build, which can use neither of the two above. it needs
+# --no-default-features, and the build fails without it:
+#   sh scripts/build-mas.sh
+mas = []
+
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
@@ -18,13 +32,14 @@ dirs = "6"
 [target.'cfg(target_os = "macos")'.dependencies]
 # the versions Tauri already uses, so nothing new is downloaded or built
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSDictionary", "NSAttributedString", "NSNotification", "NSOperation", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSDictionary", "NSAttributedString", "NSNotification", "NSOperation", "NSError", "block2"] }
 # the block type that NSNotificationCenter takes; block2 0.6 is already in the lock file
 block2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSResponder", "NSWindow", "NSFont", "NSColor", "NSParagraphStyle", "NSText", "NSAttributedString"] }
 
 [dependencies.tauri-plugin-autostart]
 version = "2"
+optional = true
 
 [profile.release]
 lto = true

@@ -363,7 +363,7 @@ if (isWindows) {
 }
 $("h-wake").textContent = `After your ${device} wakes`;
 $("diagnostics-privacy").textContent =
-  `Diagnostics are counts and a few step names kept in a small file on this ${device}. They hold no reminder text, file names or paths, and Nudge sends them nowhere. Review shows exactly what would be shared, and copying it to send to someone is your choice. An unclean exit is a launch that never recorded a normal quit, such as a crash, a force quit or a power loss; its cause is unknown. On a Mac, a logout, restart, shutdown or Quit from another app counts as a normal quit when the system asks Nudge to quit. On Windows, a logout, restart or shutdown does. Either way, it is unclean if the record cannot be written in time.`;
+  `Diagnostics are counts and a few step names kept in a small file on this ${device}. They hold no reminder text, file names or paths, and Nudge sends them nowhere. Review shows the report. Open GitHub issue opens GitHub without attaching the report. You can copy the report and paste it there if you want to share it. An unclean exit is a launch that never recorded a normal quit, such as a crash, a force quit or a power loss; its cause is unknown. On a Mac, a logout, restart, shutdown or Quit from another app counts as a normal quit when the system asks Nudge to quit. On Windows, a logout, restart or shutdown does. Either way, it is unclean if the record cannot be written in time.`;
 
 let saved = null;
 try {
@@ -627,6 +627,7 @@ let reportText = "";
 function showReport(text, note) {
   reportText = text;
   $("report-text").value = text;
+  $("copy-report").disabled = text.length === 0;
   $("report-note").textContent = note;
   $("diagnostics-report").hidden = false;
   $("review-diagnostics").setAttribute("aria-expanded", "true");
@@ -635,7 +636,7 @@ function showReport(text, note) {
 $("review-diagnostics").addEventListener("click", () => {
   invoke("review_diagnostics").then(
     (text) => {
-      showReport(text, "This is everything that would be shared.");
+      showReport(text, "Copy this report if you want to share it.");
       $("report-text").focus();
       $("report-text").setSelectionRange(0, 0);
       $("report-text").scrollTop = 0;
@@ -664,6 +665,22 @@ $("copy-report").addEventListener("click", () => {
   }, fallback);
 });
 
+$("open-issue").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  if (button.getAttribute("aria-disabled") === "true") return;
+  button.setAttribute("aria-disabled", "true");
+  $("report-note").textContent = "Opening GitHub…";
+  invoke("open_issue").then(
+    () => {
+      $("report-note").textContent = "Requested a new issue in your browser. Paste the report only if you want to share it.";
+    },
+    (error) => {
+      console.error("open_issue failed", error);
+      $("report-note").textContent = "Couldn’t open the browser.";
+    },
+  ).finally(() => button.removeAttribute("aria-disabled"));
+});
+
 $("close-report").addEventListener("click", () => {
   reportText = "";
   $("report-text").value = "";
@@ -672,9 +689,20 @@ $("close-report").addEventListener("click", () => {
   $("review-diagnostics").focus();
 });
 
+$("privacy-link").addEventListener("click", () => $("privacy-dialog").showModal());
+
 $("credits").addEventListener("click", (e) => {
   e.preventDefault();
-  invoke("open_credits");
+  const link = e.currentTarget;
+  if (link.getAttribute("aria-disabled") === "true") return;
+  link.setAttribute("aria-disabled", "true");
+  $("about-status").textContent = "Opening the credit link…";
+  invoke("open_credits").then(() => {
+    $("about-status").textContent = "";
+  }).catch((error) => {
+    console.error("open_credits failed", error);
+    $("about-status").textContent = "Couldn’t open the browser.";
+  }).finally(() => link.removeAttribute("aria-disabled"));
 });
 
 // a native window has no "Reload" or "Inspect" menu; keep the system menu for text fields

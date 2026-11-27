@@ -17,24 +17,32 @@ Fixes go into the latest release only.
 
 - It reads and writes its settings in `config.json` in your user config
   folder (`~/Library/Application Support/nudge/` on macOS) and writes the
-  chime sound to your user cache folder.
+  chime sound to your user cache folder. The Mac App Store build runs in the
+  App Sandbox, so it keeps both inside its container,
+  `~/Library/Containers/com.weskcode.nudge/Data/Library/`, and starts with its own
+  settings. If Nudge cannot read or parse its settings, it tries to move the
+  file aside as `config.json.bad-*` in the same folder. These files can hold
+  reminder text and stay until you remove them. If the move fails, Nudge leaves
+  the original in place and skips settings saves until the next launch.
 - It keeps local diagnostics by default in a `diagnostics` folder next to
   `config.json`: a journal of counts, fixed step names and coarse durations
   for the last 20 launches, a lock file, and a marker file when you turn the
   setting off. Beside the folder, `diagnostics.next` holds the number the next
   launch gets. They hold no reminder text, paths, names, exact times, device
   identifiers or panic messages, and Nudge never sends them. Review
-  diagnostics in Settings shows the exact text that would be shared, and
-  copying it is your choice. Deleting the folder removes the record; quit Nudge
+  diagnostics in Settings shows the report. You choose whether to copy it. Deleting the folder removes the record; quit Nudge
   before you delete it. Turning the setting off is also kept in
   `diagnostics.off`, beside the folder, so deleting the folder does not turn
   recording back on. `diagnostics.next` also stays when the folder is deleted,
   so the numbering carries on; delete it as well to start at 1 again.
-- It makes no network connections. The only link it opens is the credit to
-  remindful, in your browser, when you click it.
+- The privacy policy opens inside Settings. The credit link and Open GitHub
+  issue open your browser. The issue URL contains no report. You choose
+  whether to paste diagnostics into the form.
 - On macOS, with Input Monitoring allowed, it is told the key code of each
-  key press so that any key can close a reminder. It ignores key presses
-  while no reminder is showing and never records, stores or sends them.
+  key press so that any key can close a reminder. Nudge switches the key
+  listener on only while a reminder is showing, ignores key presses at other
+  times, and never records, stores or sends them.
 - Open at login adds a LaunchAgent in `~/Library/LaunchAgents` on macOS, a
   Run entry in the registry on Windows, and an entry in `~/.config/autostart`
-  on Linux.
+  on Linux. The Mac App Store build registers a login item with macOS instead.
+  It shows under System Settings > General > Login Items.

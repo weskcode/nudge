@@ -120,13 +120,34 @@ Published releases are built with `sh scripts/build-release.sh`. It builds
 the signed app from a clean copy of the current commit, removes home folder
 paths from the binary and strips it. Notarizing is a separate step.
 
+The Mac App Store build is made with `sh scripts/build-mas.sh`. It builds from a
+clean copy of the current commit with the `mas` feature. That build runs in the
+App Sandbox, opens at login through `SMAppService` (macOS 13 or later) and leaves
+out the private WebKit keys, so the reminder and Settings windows are opaque
+instead of see-through. The script needs an Apple Distribution identity and a Mac
+installer identity in your keychain, and the Mac App Store provisioning profile for
+`com.weskcode.nudge` saved as `src-tauri/embedded.provisionprofile`. The store build
+uses that bundle ID because another team registered `in.nudge.app`; the Developer
+ID build keeps `in.nudge.app`, so its permissions and login item carry over. It signs the app and
+builds `Nudge.pkg`. Uploading is a separate step. `--local` makes an ad-hoc signed
+test copy under the bundle ID `in.nudge.maslocal`, which can run beside the
+installed Nudge. `sh scripts/check-mas-bundle.sh path/to/Nudge.app` checks any
+bundle against the store requirements the script knows. This standalone check
+inspects the executable without Cargo. Pass the installer package as a second
+argument to check its signature too. During packaging, the build also checks the
+Store dependency graph in the checkout it compiles. Closing a reminder with a
+key typed in another app, through Input Monitoring, has not been shown to work in
+the sandbox. A click, Done, or a key typed while the reminder has focus does.
+
 ## Permissions (macOS)
 
 To close the reminder with any key while another app is frontmost, Nudge
 needs Input Monitoring (System Settings > Privacy & Security > Input
 Monitoring). Without it, the reminder still closes with a click, the Done
-button, or a key typed while the reminder has focus. Open at login installs a
-LaunchAgent in `~/Library/LaunchAgents`.
+button, or a key typed while the reminder has focus. Nudge switches its key
+listener on only while a reminder is showing, and ignores key presses at other
+times. Open at login installs a LaunchAgent in
+`~/Library/LaunchAgents`.
 
 ## Diagnostics
 
@@ -147,8 +168,11 @@ Settings > General shows three counts over the last 20 launches:
   shutdown is recorded the same way. A launch still counts as unclean if the
   record cannot be written in time.
 
-Review diagnostics shows the exact text that would be shared, and Copy report
-copies that text. Whether to send it to anyone is up to you.
+Review diagnostics shows the report. Copy report copies that text to the clipboard.
+Open GitHub issue opens GitHub in your browser. Paste the report there
+only if you want to share it. Settings > General also shows a short privacy
+policy inside the app, which you can read offline. [PRIVACY.md](PRIVACY.md) is the
+full version, with steps to check each claim.
 
 The record holds counts, fixed step names such as "saving settings" and coarse
 durations. A freeze while Nudge is quitting is named "quitting". The record holds

@@ -17,4 +17,6 @@ labels: bug
 - macOS version, or Windows / Linux and version:
 - Number of displays:
 
+To share diagnostics, select Settings > General > Review diagnostics, copy the report, and paste it here.
+
 Please leave out anything personal in screenshots. To report a security problem, use the Security tab instead (see SECURITY.md).

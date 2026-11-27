@@ -554,7 +554,7 @@ fn write_journal(dir: &Path, journal: &Journal) -> io::Result<()> {
     let bytes = serde_json::to_vec(journal).map_err(io::Error::other)?;
     let temp = dir.join(JOURNAL_TMP);
     let result = (|| {
-        let mut file = File::create(&temp)?;
+        let mut file = crate::private_fs::create(&temp)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
         fs::rename(&temp, dir.join(JOURNAL))
@@ -615,13 +615,13 @@ fn write_pref(dir: &Path, on: bool) -> io::Result<()> {
         // a failed write can leave an empty file behind, which reads as Off, so
         // whatever was started is removed again unless Off was already saved
         let was_off = inside.is_file() || beside.is_file();
-        let saved = fs::create_dir_all(dir)
-            .and_then(|()| fs::write(&inside, b"off\n"))
+        let saved = crate::private_fs::create_dir_all(dir)
+            .and_then(|()| crate::private_fs::write(&inside, b"off\n"))
             .and_then(|()| match beside.parent() {
-                Some(parent) => fs::create_dir_all(parent),
+                Some(parent) => crate::private_fs::create_dir_all(parent),
                 None => Ok(()),
             })
-            .and_then(|()| fs::write(&beside, b"off\n"));
+            .and_then(|()| crate::private_fs::write(&beside, b"off\n"));
         if let Err(error) = saved {
             if !was_off {
                 let _ = fs::remove_file(&inside);
@@ -670,7 +670,7 @@ fn read_next(dir: &Path) -> u32 {
 fn write_next(dir: &Path, next: u32) -> io::Result<()> {
     let path = next_marker(dir);
     let temp = path.with_extension("next.tmp");
-    let result = fs::write(&temp, format!("{next}\n")).and_then(|()| fs::rename(&temp, &path));
+    let result = crate::private_fs::write(&temp, format!("{next}\n").as_bytes()).and_then(|()| fs::rename(&temp, &path));
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
@@ -720,9 +720,14 @@ impl Lease {
     // the file is never deleted, so every process locks the same one; the
     // system drops the lock when the holder dies
     fn acquire(dir: &Path) -> Result<Lease, LeaseError> {
-        fs::create_dir_all(dir).map_err(LeaseError::Io)?;
+        crate::private_fs::create_dir_all(dir).map_err(LeaseError::Io)?;
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
