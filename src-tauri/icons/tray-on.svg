@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="-2 -2 22 22">
+  <!-- the menu bar desk bell, drawn on an 18 pt grid inside a 22 pt status item.
+       macOS uses it as a template image, so only its shape counts, not its colour.
+       scripts/render-tray-icons.swift turns it into tray-on.png and src/tray-glyph.png -->
+  <g fill="none" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 2.6 H11 M9 2.6 V6.4"/>
+    <path d="M3.2 12.2 A5.8 5.8 0 0 1 14.8 12.2 Z"/>
+    <path d="M1.8 14.9 H16.2"/>
+  </g>
+</svg>
