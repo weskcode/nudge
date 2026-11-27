@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="-2 -2 22 22">
+  <!-- the bell with a slash, for reminders off; the mask cuts a gap around the slash -->
+  <defs>
+    <mask id="gap" maskUnits="userSpaceOnUse" x="-2" y="-2" width="22" height="22">
+      <rect x="-2" y="-2" width="22" height="22" fill="#fff"/>
+      <path d="M2.6 2.6 L15.6 15.6" stroke="#000" stroke-width="3.4" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <g fill="none" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <g mask="url(#gap)">
+      <path d="M7 2.6 H11 M9 2.6 V6.4"/>
+      <path d="M3.2 12.2 A5.8 5.8 0 0 1 14.8 12.2 Z"/>
+      <path d="M1.8 14.9 H16.2"/>
+    </g>
+    <path d="M2.6 2.6 L15.6 15.6"/>
+  </g>
+</svg>
